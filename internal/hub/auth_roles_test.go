@@ -9,22 +9,23 @@ import (
 	"testing"
 
 	"github.com/betuah/svc-peer/internal/protocol"
+	"github.com/google/uuid"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
 func testHub(t *testing.T, hubID string) *Hub {
 	t.Helper()
 	h, err := New(Config{
-		ListenAddr:           ":0",
-		HubID:                hubID,
-		ManagementTokenSeed:  "mgmt-" + hubID,
-		RelaySecret:          "relay-" + hubID,
-		OverlayCIDR:          "10.10.0.0/16",
-		DNSSuffix:            "peer.local",
-		HeartbeatTimeoutSec:  45,
-		HubEndpoint:          "127.0.0.1:51820",
-		STUNURLs:             []string{"stun:stun.l.google.com:19302"},
-		RelayURLs:            []string{"udp://127.0.0.1:3478"},
+		ListenAddr:          ":0",
+		HubID:               hubID,
+		CenterBootstrap:     "boot-" + hubID,
+		ManagementTokenSeed: "mgmt-" + hubID,
+		RelaySecret:         "relay-" + hubID,
+		OverlayCIDR:         "10.10.0.0/16",
+		DNSSuffix:           "peer.local",
+		HeartbeatTimeoutSec: 45,
+		STUNURLs:            []string{"stun:stun.l.google.com:19302"},
+		RelayURLs:           []string{"udp://127.0.0.1:3478"},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -32,143 +33,129 @@ func testHub(t *testing.T, hubID string) *Hub {
 	return h
 }
 
-func TestManagementTokenOnlyCanMintAndGrant(t *testing.T) {
+func registerLocal(t *testing.T, srvURL, bearer, agentID, name, role string) protocol.RegisterResponse {
+	t.Helper()
+	k, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(protocol.RegisterRequest{
+		AgentID: agentID, Name: name, PublicKey: k.PublicKey().String(), Role: role,
+	})
+	r, _ := http.NewRequest(http.MethodPost, srvURL+"/api/v1/agents/register", bytes.NewReader(body))
+	r.Header.Set("Authorization", "Bearer "+bearer)
+	r.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("register %s: %s %s", name, res.Status, b)
+	}
+	var out protocol.RegisterResponse
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	return out
+}
+
+func TestCenterBootstrapAndAllowlistSync(t *testing.T) {
 	h := testHub(t, "hub-main")
 	srv := httptest.NewServer(h.Router())
 	defer srv.Close()
 
-	// Agent token cannot mint.
-	agentRec, agentRaw, err := h.Tokens().Mint(h.cfg.HubID, "cam", nil)
-	if err != nil {
-		t.Fatal(err)
+	centerID := uuid.NewString()
+	c := registerLocal(t, srv.URL, "boot-hub-main", centerID, "center", protocol.RoleCenter)
+	if c.Role != protocol.RoleCenter || c.AgentID != centerID {
+		t.Fatalf("center: %+v", c)
 	}
-	_ = agentRec
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/hub/tokens", bytes.NewReader([]byte(`{"label":"x"}`)))
-	req.Header.Set("Authorization", "Bearer "+agentRaw)
+	if len(c.Peers) != 0 {
+		t.Fatalf("center with no edges should have 0 peers, got %d", len(c.Peers))
+	}
+
+	// Second center rejected.
+	other := uuid.NewString()
+	k, _ := wgtypes.GeneratePrivateKey()
+	body, _ := json.Marshal(protocol.RegisterRequest{
+		AgentID: other, Name: "c2", PublicKey: k.PublicKey().String(), Role: protocol.RoleCenter,
+	})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/agents/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer boot-hub-main")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("agent mint: want 401/403, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("second center: want 409, got %d", resp.StatusCode)
 	}
 
-	// Management token can mint.
-	req, _ = http.NewRequest(http.MethodPost, srv.URL+"/hub/tokens", bytes.NewReader([]byte(`{"label":"cam2"}`)))
-	req.Header.Set("Authorization", "Bearer mgmt-hub-main")
+	// Center syncs edge token.
+	edgeTok := "spt_edge_join_token_test_01"
+	syncBody, _ := json.Marshal(protocol.AllowlistSyncRequest{Tokens: []protocol.AllowlistToken{
+		{ID: "edge-1", Token: edgeTok, Label: "cam"},
+	}})
+	req, _ = http.NewRequest(http.MethodPut, srv.URL+"/hub/allowlist", bytes.NewReader(syncBody))
+	req.Header.Set("Authorization", "Bearer boot-hub-main")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("mgmt mint: %s %s", resp.Status, body)
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("allowlist: %s %s", resp.Status, b)
 	}
 
-	// Register two agents.
-	reg := func(name, tok string) string {
-		t.Helper()
-		k, err := wgtypes.GeneratePrivateKey()
-		if err != nil {
-			t.Fatal(err)
-		}
-		body, _ := json.Marshal(protocol.RegisterRequest{Name: name, PublicKey: k.PublicKey().String()})
-		r, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/agents/register", bytes.NewReader(body))
-		r.Header.Set("Authorization", "Bearer "+tok)
-		r.Header.Set("Content-Type", "application/json")
-		res, err := http.DefaultClient.Do(r)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer res.Body.Close()
-		if res.StatusCode != http.StatusOK {
-			b, _ := io.ReadAll(res.Body)
-			t.Fatalf("register %s: %s %s", name, res.Status, b)
-		}
-		var out protocol.RegisterResponse
-		_ = json.NewDecoder(res.Body).Decode(&out)
-		return out.AgentID
+	edgeID := uuid.NewString()
+	e := registerLocal(t, srv.URL, edgeTok, edgeID, "cam-01", protocol.RoleEdge)
+	if e.Role != protocol.RoleEdge || len(e.Peers) != 1 || e.Peers[0].PeerID != centerID {
+		t.Fatalf("edge register/netmap: %+v", e)
+	}
+	if e.CenterAgentID != centerID {
+		t.Fatalf("center_agent_id: %s", e.CenterAgentID)
 	}
 
-	aID := reg("cam-01", agentRaw)
-
-	// Mint second agent via management.
-	req, _ = http.NewRequest(http.MethodPost, srv.URL+"/hub/tokens", bytes.NewReader([]byte(`{"label":"viewer"}`)))
-	req.Header.Set("Authorization", "Bearer mgmt-hub-main")
-	req.Header.Set("Content-Type", "application/json")
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var tok2 protocol.TokenInfo
-	_ = json.NewDecoder(resp.Body).Decode(&tok2)
-	resp.Body.Close()
-	bID := reg("viewer-01", tok2.Token)
-
-	// Agent cannot grant.
-	grantBody, _ := json.Marshal(protocol.CreateGrantRequest{AgentAID: aID, AgentBID: bID})
-	req, _ = http.NewRequest(http.MethodPost, srv.URL+"/hub/grants", bytes.NewReader(grantBody))
-	req.Header.Set("Authorization", "Bearer "+agentRaw)
+	// Edge cannot sync allowlist.
+	req, _ = http.NewRequest(http.MethodPut, srv.URL+"/hub/allowlist", bytes.NewReader(syncBody))
+	req.Header.Set("Authorization", "Bearer "+edgeTok)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("agent grant: want 401/403, got %d", resp.StatusCode)
-	}
-
-	// Management can grant.
-	req, _ = http.NewRequest(http.MethodPost, srv.URL+"/hub/grants", bytes.NewReader(grantBody))
-	req.Header.Set("Authorization", "Bearer mgmt-hub-main")
-	req.Header.Set("Content-Type", "application/json")
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("mgmt grant: %s %s", resp.Status, body)
-	}
-
-	// Netmap for agent now includes peer.
-	req, _ = http.NewRequest(http.MethodGet, srv.URL+"/api/v1/netmap", nil)
-	req.Header.Set("Authorization", "Bearer "+agentRaw)
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	var nm protocol.NetmapResponse
-	_ = json.NewDecoder(resp.Body).Decode(&nm)
-	if len(nm.Peers) != 2 {
-		t.Fatalf("after grant expected 2 peers, got %d: %+v", len(nm.Peers), nm.Peers)
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("edge must not sync allowlist")
 	}
 }
 
 func TestHubIsolationRejectsCrossHubToken(t *testing.T) {
 	h1 := testHub(t, "hub-a")
 	h2 := testHub(t, "hub-b")
+	srv1 := httptest.NewServer(h1.Router())
+	defer srv1.Close()
 	srv2 := httptest.NewServer(h2.Router())
 	defer srv2.Close()
 
-	_, raw, err := h1.Tokens().Mint("hub-a", "cam", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	k, err := wgtypes.GeneratePrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ := json.Marshal(protocol.RegisterRequest{Name: "cam", PublicKey: k.PublicKey().String()})
-	req, _ := http.NewRequest(http.MethodPost, srv2.URL+"/api/v1/agents/register", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+raw)
+	registerLocal(t, srv1.URL, "boot-hub-a", uuid.NewString(), "center", protocol.RoleCenter)
+	syncBody, _ := json.Marshal(protocol.AllowlistSyncRequest{Tokens: []protocol.AllowlistToken{
+		{ID: "e", Token: "spt_cross_hub_tok", Label: "x"},
+	}})
+	req, _ := http.NewRequest(http.MethodPut, srv1.URL+"/hub/allowlist", bytes.NewReader(syncBody))
+	req.Header.Set("Authorization", "Bearer boot-hub-a")
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	k, _ := wgtypes.GeneratePrivateKey()
+	body, _ := json.Marshal(protocol.RegisterRequest{
+		AgentID: uuid.NewString(), Name: "x", PublicKey: k.PublicKey().String(), Role: protocol.RoleEdge,
+	})
+	req, _ = http.NewRequest(http.MethodPost, srv2.URL+"/api/v1/agents/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer spt_cross_hub_tok")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -176,34 +163,6 @@ func TestHubIsolationRejectsCrossHubToken(t *testing.T) {
 	}
 	resp.Body.Close()
 	if resp.StatusCode == http.StatusOK {
-		t.Fatal("cross-hub token must not register on another hub")
-	}
-}
-
-func TestTokenStoreRoleAndHubScope(t *testing.T) {
-	s := NewTokenStore("hub-main")
-	if err := s.SeedManagement("mgmt-id", "mgmt-secret"); err != nil {
-		t.Fatal(err)
-	}
-	rec, err := s.Lookup("mgmt-secret")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rec.Role != RoleManagement || rec.HubID != "hub-main" {
-		t.Fatalf("mgmt token: %+v", rec)
-	}
-	agent, raw, err := s.Mint("hub-main", "label", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if agent.Role != RoleAgent || agent.HubID != "hub-main" {
-		t.Fatalf("agent token: %+v", agent)
-	}
-	if _, _, err := s.Mint("other-hub", "x", nil); err == nil {
-		t.Fatal("mint for wrong hub_id must fail")
-	}
-	looked, err := s.Lookup(raw)
-	if err != nil || looked.Role != RoleAgent {
-		t.Fatalf("lookup agent: %+v %v", looked, err)
+		t.Fatal("cross-hub token must not register")
 	}
 }

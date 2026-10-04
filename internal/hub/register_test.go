@@ -1,4 +1,4 @@
-// Unit tests: token bind on first register, reconnect identity, heartbeat, netmap DNS.
+// Unit tests: local agent_id register, center claim, reconnect, heartbeat.
 
 package hub
 
@@ -9,74 +9,68 @@ import (
 	"github.com/betuah/svc-peer/internal/protocol"
 )
 
-func TestTokenBindAgentIDOnFirstRegister(t *testing.T) {
-	tokens := NewTokenStore("hub-main")
-	rec, raw, err := tokens.Mint("hub-main", "cam", []string{"warehouse"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rec.AgentID != "" {
-		t.Fatalf("agent id must be empty at mint, got %q", rec.AgentID)
-	}
-
-	looked, err := tokens.Lookup(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if looked.ID != rec.ID {
-		t.Fatalf("lookup id mismatch")
-	}
-
+func TestRegisterPresentedLocalAgentID(t *testing.T) {
 	reg, err := NewRegistry("hub-main", "10.10.0.0/16", "peer.local", 45*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	a1, created, err := reg.RegisterFirstOrReconnect(looked.ID, looked.AgentID, protocol.RegisterRequest{
-		Name:      "cam-warehouse-01",
-		PublicKey: "pubkey-A",
-		Tags:      []string{"warehouse"},
+	a1, created, err := reg.RegisterPresented("550e8400-e29b-41d4-a716-446655440000", "", protocol.RoleCenter, protocol.RegisterRequest{
+		AgentID: "550e8400-e29b-41d4-a716-446655440000",
+		Name:    "center-app", PublicKey: "pubkey-C",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !created {
-		t.Fatal("expected first register to create agent")
+	if !created || a1.Role != protocol.RoleCenter {
+		t.Fatalf("center first register: created=%v role=%s", created, a1.Role)
 	}
-	if a1.ID == "" {
-		t.Fatal("expected agent id")
-	}
-	if a1.HubID != "hub-main" {
-		t.Fatalf("hub_id: got %q", a1.HubID)
-	}
-	if err := tokens.BindAgentID(looked.ID, a1.ID); err != nil {
-		t.Fatal(err)
+	if reg.CenterAgentID() != a1.ID {
+		t.Fatal("center id not set")
 	}
 
-	bound, err := tokens.Lookup(raw)
+	a2, created2, err := reg.RegisterPresented(a1.ID, "", protocol.RoleCenter, protocol.RegisterRequest{
+		AgentID: a1.ID, Name: "center-app", PublicKey: "pubkey-C",
+	})
+	if err != nil || created2 || a2.ID != a1.ID || a2.OverlayIP != a1.OverlayIP {
+		t.Fatalf("reconnect: created=%v err=%v a2=%+v", created2, err, a2)
+	}
+}
+
+func TestOneCenterPerHub(t *testing.T) {
+	reg, err := NewRegistry("hub-main", "10.10.0.0/16", "peer.local", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bound.AgentID != a1.ID {
-		t.Fatalf("token not bound: got %q want %q", bound.AgentID, a1.ID)
-	}
-
-	// Reconnect with same token → same agent id / overlay IP.
-	a2, created2, err := reg.RegisterFirstOrReconnect(bound.ID, bound.AgentID, protocol.RegisterRequest{
-		Name:      "cam-warehouse-01",
-		PublicKey: "pubkey-A",
+	_, _, err = reg.RegisterPresented("center-1", "", protocol.RoleCenter, protocol.RegisterRequest{
+		Name: "c1", PublicKey: "pk1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created2 {
-		t.Fatal("reconnect must not create a new agent")
+	_, _, err = reg.RegisterPresented("center-2", "", protocol.RoleCenter, protocol.RegisterRequest{
+		Name: "c2", PublicKey: "pk2",
+	})
+	if err != ErrCenterExists {
+		t.Fatalf("want ErrCenterExists, got %v", err)
 	}
-	if a2.ID != a1.ID {
-		t.Fatalf("agent id changed on reconnect: %s → %s", a1.ID, a2.ID)
+}
+
+func TestAgentIDCollisionRejected(t *testing.T) {
+	reg, err := NewRegistry("hub-main", "10.10.0.0/16", "peer.local", time.Minute)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if a2.OverlayIP != a1.OverlayIP {
-		t.Fatalf("overlay ip changed on reconnect")
+	_, _, err = reg.RegisterPresented("same-id", "tok-a", protocol.RoleEdge, protocol.RegisterRequest{
+		Name: "e1", PublicKey: "pk1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = reg.RegisterPresented("same-id", "tok-b", protocol.RoleEdge, protocol.RegisterRequest{
+		Name: "e2", PublicKey: "pk2",
+	})
+	if err != ErrAgentIDCollision {
+		t.Fatalf("want collision, got %v", err)
 	}
 }
 
@@ -85,75 +79,22 @@ func TestHeartbeatOnlineOffline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tokens := NewTokenStore("hub-main")
-	rec, _, err := tokens.Mint("hub-main", "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a, _, err := reg.RegisterFirstOrReconnect(rec.ID, "", protocol.RegisterRequest{
-		Name:      "viewer-01",
-		PublicKey: "pubkey-B",
+	a, _, err := reg.RegisterPresented("viewer-id", "t1", protocol.RoleEdge, protocol.RegisterRequest{
+		Name: "viewer-01", PublicKey: "pubkey-B",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !a.Online {
-		t.Fatal("expected online after register")
-	}
-
-	// Force last seen into the past by sweeping after timeout.
 	time.Sleep(40 * time.Millisecond)
 	flipped := reg.SweepOffline()
 	if len(flipped) != 1 || flipped[0] != a.ID {
-		t.Fatalf("expected agent marked offline, got %v", flipped)
+		t.Fatalf("expected offline, got %v", flipped)
 	}
-	got, err := reg.Get(a.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Online {
-		t.Fatal("expected offline")
-	}
-
 	if err := reg.Heartbeat(a.ID); err != nil {
 		t.Fatal(err)
 	}
-	got, _ = reg.Get(a.ID)
+	got, _ := reg.Get(a.ID)
 	if !got.Online {
 		t.Fatal("expected online after heartbeat")
-	}
-}
-
-func TestNetmapDefaultIsHubSpokeNotOpenMesh(t *testing.T) {
-	reg, err := NewRegistry("hub-main", "10.10.0.0/16", "peer.local", time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a1, _, err := reg.RegisterFirstOrReconnect("t1", "", protocol.RegisterRequest{
-		Name: "cam-01", PublicKey: "pk1",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _, err = reg.RegisterFirstOrReconnect("t2", "", protocol.RegisterRequest{
-		Name: "viewer-01", PublicKey: "pk2",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	hub := HubPeer{
-		PeerID:    PeerIDHub,
-		PublicKey: "hub-pk",
-		Endpoint:  "127.0.0.1:51820",
-		OverlayIP: reg.HubOverlayIP().String(),
-		DNSName:   "hub.peer.local",
-	}
-	nm := NewNetmapBuilder(reg, NewGrantStore(), hub).ForAgent(a1.ID)
-	if len(nm.Peers) != 1 || nm.Peers[0].PeerID != PeerIDHub {
-		t.Fatalf("expected hub-only peers, got %+v", nm.Peers)
-	}
-	if nm.DNSMap["cam-01.peer.local"] == "" || nm.DNSMap["viewer-01.peer.local"] == "" {
-		t.Fatalf("dns map incomplete: %#v", nm.DNSMap)
 	}
 }

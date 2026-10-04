@@ -5,133 +5,92 @@ import (
 	"time"
 
 	"github.com/betuah/svc-peer/internal/protocol"
-	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
-func testHubPeer(t *testing.T) HubPeer {
-	t.Helper()
-	k, err := wgtypes.GeneratePrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return HubPeer{
-		PeerID:    PeerIDHub,
-		PublicKey: k.PublicKey().String(),
-		Endpoint:  "203.0.113.1:51820",
-		OverlayIP: "10.10.0.1/32",
-		DNSName:   "hub.peer.local",
-	}
-}
-
-func TestNetmapDefaultAgentPeersHubOnly(t *testing.T) {
+func TestNetmapEdgePeersOnlyCenter(t *testing.T) {
 	reg, err := NewRegistry("hub-main", "10.10.0.0/16", "peer.local", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a1, _, err := reg.RegisterFirstOrReconnect("t1", "", protocol.RegisterRequest{
-		Name: "cam-01", PublicKey: "pk1",
+	center, _, err := reg.RegisterPresented("center-id", "", protocol.RoleCenter, protocol.RegisterRequest{
+		Name: "center", PublicKey: "pk-c",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = reg.RegisterFirstOrReconnect("t2", "", protocol.RegisterRequest{
-		Name: "viewer-01", PublicKey: "pk2",
+	edge, _, err := reg.RegisterPresented("edge-id", "t1", protocol.RoleEdge, protocol.RegisterRequest{
+		Name: "cam-01", PublicKey: "pk-e",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = reg.RegisterPresented("edge-2", "t2", protocol.RoleEdge, protocol.RegisterRequest{
+		Name: "cam-02", PublicKey: "pk-e2",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	grants := NewGrantStore()
-	nm := NewNetmapBuilder(reg, grants, testHubPeer(t)).ForAgent(a1.ID)
+	nm := NewNetmapBuilder(reg, NewGrantStore()).ForAgent(edge.ID)
 	if len(nm.Peers) != 1 {
-		t.Fatalf("default ACL: expected hub-only peer list, got %d peers: %+v", len(nm.Peers), nm.Peers)
+		t.Fatalf("edge should peer only center, got %d: %+v", len(nm.Peers), nm.Peers)
 	}
-	if nm.Peers[0].PeerID != PeerIDHub {
-		t.Fatalf("expected hub peer, got %+v", nm.Peers[0])
+	if nm.Peers[0].PeerID != center.ID || nm.Peers[0].Role != protocol.RoleCenter {
+		t.Fatalf("peer: %+v", nm.Peers[0])
 	}
-	// MagicDNS may still list other agents (resolution ≠ dataplane permission).
-	if nm.DNSMap["viewer-01.peer.local"] == "" {
-		t.Fatalf("dns map should include hub agents: %#v", nm.DNSMap)
+	if nm.CenterAgentID != center.ID {
+		t.Fatalf("center_agent_id: %s", nm.CenterAgentID)
 	}
-	// No hairpin: hub AllowedIPs must not advertise the full overlay / other agents.
-	for _, ip := range nm.Peers[0].AllowedIPs {
-		if ip == "10.10.0.0/16" {
-			t.Fatal("hub AllowedIPs must not include full overlay (no hairpin)")
-		}
-	}
-}
-
-func TestNetmapGrantAddsDirectA2APeers(t *testing.T) {
-	reg, err := NewRegistry("hub-main", "10.10.0.0/16", "peer.local", time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a1, _, err := reg.RegisterFirstOrReconnect("t1", "", protocol.RegisterRequest{
-		Name: "cam-01", PublicKey: "pk1",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	a2, _, err := reg.RegisterFirstOrReconnect("t2", "", protocol.RegisterRequest{
-		Name: "viewer-01", PublicKey: "pk2",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	grants := NewGrantStore()
-	if _, err := grants.Grant(a1.ID, a2.ID); err != nil {
-		t.Fatal(err)
-	}
-	nm := NewNetmapBuilder(reg, grants, testHubPeer(t)).ForAgent(a1.ID)
-	if len(nm.Peers) != 2 {
-		t.Fatalf("expected hub + granted peer, got %d", len(nm.Peers))
-	}
-	var sawHub, sawA2 bool
 	for _, p := range nm.Peers {
-		switch p.PeerID {
-		case PeerIDHub:
-			sawHub = true
-		case a2.ID:
-			sawA2 = true
-			if len(p.AllowedIPs) != 1 || p.AllowedIPs[0] != a2.OverlayIP.String() {
-				t.Fatalf("granted peer AllowedIPs: %v", p.AllowedIPs)
-			}
-		default:
-			t.Fatalf("unexpected peer %q", p.PeerID)
+		if p.PeerID == "hub" || p.Role == "hub" {
+			t.Fatal("hub must not be app dataplane peer")
 		}
-	}
-	if !sawHub || !sawA2 {
-		t.Fatalf("missing peers hub=%v a2=%v", sawHub, sawA2)
 	}
 }
 
-func TestNetmapHubPeersAllAgents(t *testing.T) {
+func TestNetmapCenterPeersAllEdges(t *testing.T) {
 	reg, err := NewRegistry("hub-main", "10.10.0.0/16", "peer.local", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a1, _, err := reg.RegisterFirstOrReconnect("t1", "", protocol.RegisterRequest{
-		Name: "cam-01", PublicKey: "pk1",
+	center, _, err := reg.RegisterPresented("center-id", "", protocol.RoleCenter, protocol.RegisterRequest{
+		Name: "center", PublicKey: "pk-c",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	a2, _, err := reg.RegisterFirstOrReconnect("t2", "", protocol.RegisterRequest{
-		Name: "viewer-01", PublicKey: "pk2",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	nm := NewNetmapBuilder(reg, NewGrantStore(), testHubPeer(t)).ForHub()
+	e1, _, _ := reg.RegisterPresented("e1", "t1", protocol.RoleEdge, protocol.RegisterRequest{Name: "e1", PublicKey: "pk1"})
+	e2, _, _ := reg.RegisterPresented("e2", "t2", protocol.RoleEdge, protocol.RegisterRequest{Name: "e2", PublicKey: "pk2"})
+
+	nm := NewNetmapBuilder(reg, NewGrantStore()).ForAgent(center.ID)
 	if len(nm.Peers) != 2 {
-		t.Fatalf("hub netmap should list all agents, got %d", len(nm.Peers))
+		t.Fatalf("center should peer all edges, got %d", len(nm.Peers))
 	}
 	ids := map[string]bool{}
 	for _, p := range nm.Peers {
 		ids[p.PeerID] = true
+		if p.Role != protocol.RoleEdge {
+			t.Fatalf("expected edge role: %+v", p)
+		}
 	}
-	if !ids[a1.ID] || !ids[a2.ID] {
-		t.Fatalf("hub peers missing agents: %+v", nm.Peers)
+	if !ids[e1.ID] || !ids[e2.ID] {
+		t.Fatalf("missing edges: %+v", nm.Peers)
+	}
+}
+
+func TestNetmapEdgeEdgeDeniedWithoutGrant(t *testing.T) {
+	reg, err := NewRegistry("hub-main", "10.10.0.0/16", "peer.local", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _ = reg.RegisterPresented("c", "", protocol.RoleCenter, protocol.RegisterRequest{Name: "c", PublicKey: "pkc"})
+	e1, _, _ := reg.RegisterPresented("e1", "t1", protocol.RoleEdge, protocol.RegisterRequest{Name: "e1", PublicKey: "pk1"})
+	e2, _, _ := reg.RegisterPresented("e2", "t2", protocol.RoleEdge, protocol.RegisterRequest{Name: "e2", PublicKey: "pk2"})
+	b := NewNetmapBuilder(reg, NewGrantStore())
+	if b.AllowedPeer(e1.ID, e2.ID) {
+		t.Fatal("edge↔edge must be denied by default")
+	}
+	if !b.AllowedPeer(e1.ID, "c") {
+		t.Fatal("edge↔center must be allowed")
 	}
 }

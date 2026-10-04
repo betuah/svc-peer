@@ -3,10 +3,17 @@ package protocol
 
 import "time"
 
+// Agent roles within a hub_id.
+const (
+	RoleCenter = "center"
+	RoleEdge   = "edge"
+)
+
 // PeerConfig is a WireGuard peer entry in a netmap revision.
 type PeerConfig struct {
 	PeerID              string   `json:"peer_id"`
-	AgentID             string   `json:"agent_id,omitempty"` // same as peer_id for agents; "hub" for hub peer
+	AgentID             string   `json:"agent_id,omitempty"`
+	Role                string   `json:"role,omitempty"` // center | edge
 	PublicKey           string   `json:"public_key"`
 	Endpoint            string   `json:"endpoint,omitempty"`
 	AllowedIPs          []string `json:"allowed_ips"`
@@ -26,6 +33,7 @@ type Endpoint struct {
 type AgentSummary struct {
 	ID           string    `json:"id"`
 	Name         string    `json:"name"`
+	Role         string    `json:"role"`
 	OverlayIP    string    `json:"overlay_ip"`
 	DNSName      string    `json:"dns_name"`
 	Tags         []string  `json:"tags,omitempty"`
@@ -35,9 +43,12 @@ type AgentSummary struct {
 }
 
 // RegisterRequest is the body of POST /agents/register.
+// AgentID is generated locally by the agent and persisted on disk — not assigned by the hub.
 type RegisterRequest struct {
+	AgentID      string   `json:"agent_id"`
 	Name         string   `json:"name"`
 	PublicKey    string   `json:"public_key"`
+	Role         string   `json:"role,omitempty"` // center | edge
 	Tags         []string `json:"tags,omitempty"`
 	Capabilities []string `json:"capabilities,omitempty"`
 	Platform     string   `json:"platform,omitempty"`
@@ -48,62 +59,87 @@ type RegisterRequest struct {
 type RegisterResponse struct {
 	AgentID        string            `json:"agent_id"`
 	HubID          string            `json:"hub_id"`
+	Role           string            `json:"role"`
+	CenterAgentID  string            `json:"center_agent_id,omitempty"`
 	OverlayIP      string            `json:"overlay_ip"`
 	DNSName        string            `json:"dns_name"`
 	NetmapRevision uint64            `json:"netmap_revision"`
 	Peers          []PeerConfig      `json:"peers"`
-	DNSMap         map[string]string `json:"dns_map,omitempty"` // name → overlay IP for MagicDNS
+	DNSMap         map[string]string `json:"dns_map,omitempty"`
 	STUNURLs       []string          `json:"stun_urls,omitempty"`
 	RelayURLs      []string          `json:"relay_urls,omitempty"`
 }
 
 // AgentsListResponse is the body of GET /agents.
 type AgentsListResponse struct {
-	HubID  string         `json:"hub_id"`
-	Agents []AgentSummary `json:"agents"`
+	HubID         string         `json:"hub_id"`
+	CenterAgentID string         `json:"center_agent_id,omitempty"`
+	Agents        []AgentSummary `json:"agents"`
 }
 
 // NetmapResponse is GET /netmap (or WS netmap push payload without type wrapper).
 type NetmapResponse struct {
-	Revision uint64            `json:"revision"`
-	Peers    []PeerConfig      `json:"peers"`
-	DNSMap   map[string]string `json:"dns_map,omitempty"`
+	Revision      uint64            `json:"revision"`
+	CenterAgentID string            `json:"center_agent_id,omitempty"`
+	Peers         []PeerConfig      `json:"peers"`
+	DNSMap        map[string]string `json:"dns_map,omitempty"`
 }
 
 // HealthResponse is GET /health.
 type HealthResponse struct {
 	Status          string `json:"status"`
 	HubID           string `json:"hub_id"`
+	CenterAgentID   string `json:"center_agent_id,omitempty"`
 	AgentsConnected int    `json:"agents_connected"`
 	NetmapRevision  uint64 `json:"netmap_revision"`
 }
 
-// CreateTokenRequest is POST /hub/tokens.
+// AllowlistToken is one edge join token pushed from center → hub.
+type AllowlistToken struct {
+	ID    string   `json:"id,omitempty"`
+	Token string   `json:"token"`
+	Label string   `json:"label,omitempty"`
+	Tags  []string `json:"tags,omitempty"`
+}
+
+// AllowlistSyncRequest is PUT /hub/allowlist (center-authored).
+type AllowlistSyncRequest struct {
+	Tokens []AllowlistToken `json:"tokens"`
+}
+
+// AllowlistSyncResponse acknowledges a center allowlist sync.
+type AllowlistSyncResponse struct {
+	HubID  string   `json:"hub_id"`
+	Upsert int      `json:"upserted"`
+	IDs    []string `json:"ids,omitempty"`
+}
+
+// CreateTokenRequest is break-glass POST /hub/tokens (management only).
 type CreateTokenRequest struct {
 	Label string   `json:"label,omitempty"`
 	Tags  []string `json:"tags,omitempty"`
 }
 
-// TokenInfo is returned when minting or listing tokens (secret only on create).
+// TokenInfo is returned when minting or listing tokens (secret only on create/sync ack optional).
 type TokenInfo struct {
 	ID        string    `json:"id"`
 	HubID     string    `json:"hub_id,omitempty"`
 	Role      string    `json:"role,omitempty"`
 	Label     string    `json:"label,omitempty"`
-	Token     string    `json:"token,omitempty"` // only on create
+	Token     string    `json:"token,omitempty"`
 	AgentID   string    `json:"agent_id,omitempty"`
 	Revoked   bool      `json:"revoked"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// RotateTokenResponse is POST /hub/tokens/{id}/rotate.
+// RotateTokenResponse is POST /hub/tokens/{id}/rotate (break-glass).
 type RotateTokenResponse struct {
 	ID      string `json:"id"`
 	Token   string `json:"token"`
 	AgentID string `json:"agent_id,omitempty"`
 }
 
-// CreateGrantRequest is POST /hub/grants (management token only).
+// CreateGrantRequest is POST /hub/grants (center-authored; management break-glass also accepted).
 type CreateGrantRequest struct {
 	AgentAID string `json:"agent_a_id"`
 	AgentBID string `json:"agent_b_id"`
