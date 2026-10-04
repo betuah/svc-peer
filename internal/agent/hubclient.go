@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +23,7 @@ type HubClient struct {
 	baseURL string
 	token   string
 	http    *http.Client
+	dialer  websocket.Dialer
 	log     *slog.Logger
 
 	mu   sync.Mutex
@@ -29,15 +31,29 @@ type HubClient struct {
 }
 
 // NewHubClient creates a control-plane client.
-func NewHubClient(baseURL, token string, log *slog.Logger) *HubClient {
+// insecureSkipVerify disables TLS verification for https/wss (dev/self-signed only; default false).
+func NewHubClient(baseURL, token string, insecureSkipVerify bool, log *slog.Logger) *HubClient {
 	if log == nil {
 		log = slog.Default()
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	var tlsCfg *tls.Config
+	if insecureSkipVerify {
+		tlsCfg = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // explicit opt-in for local/dev
+		transport.TLSClientConfig = tlsCfg
 	}
 	return &HubClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		token:   token,
-		http:    &http.Client{Timeout: 15 * time.Second},
-		log:     log,
+		http: &http.Client{
+			Timeout:   15 * time.Second,
+			Transport: transport,
+		},
+		dialer: websocket.Dialer{
+			HandshakeTimeout: 10 * time.Second,
+			TLSClientConfig:  tlsCfg,
+		},
+		log: log,
 	}
 }
 
@@ -133,16 +149,17 @@ func (c *HubClient) RunControlWS(ctx context.Context, agentID, hubID string, hea
 	if err != nil {
 		return err
 	}
-	switch u.Scheme {
+	switch strings.ToLower(u.Scheme) {
 	case "https":
 		u.Scheme = "wss"
-	default:
+	case "http":
 		u.Scheme = "ws"
+	default:
+		return fmt.Errorf("unsupported hub_url scheme %q (use http or https)", u.Scheme)
 	}
 	u.Path = "/ws/v1/agent"
 
-	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
-	conn, _, err := dialer.DialContext(ctx, u.String(), nil)
+	conn, _, err := c.dialer.DialContext(ctx, u.String(), nil)
 	if err != nil {
 		return fmt.Errorf("control ws dial: %w", err)
 	}

@@ -63,7 +63,7 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 	return &Agent{
 		cfg:     cfg,
 		log:     log,
-		client:  NewHubClient(cfg.HubURL, cfg.AuthCredential(), log),
+		client:  NewHubClient(cfg.HubURL, cfg.AuthCredential(), cfg.HubTLSInsecureSkipVerify, log),
 		device:  dev,
 		dns:     dns.NewResolver(),
 		agentID: agentID,
