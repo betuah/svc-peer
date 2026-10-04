@@ -13,3 +13,8 @@ relay_urls:
   - "ws://relay:3479/relay"
 heartbeat_timeout_sec: 45
 state_path: "/var/lib/svc-peer/hub-state.json"
+
+# Production: mount PEM cert/key and set both paths (serves HTTPS + WSS).
+# Example Compose volume: ./certs:/etc/svc-peer/tls:ro
+# tls_cert_file: "/etc/svc-peer/tls/cert.pem"
+# tls_key_file: "/etc/svc-peer/tls/key.pem"

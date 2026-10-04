@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"time"
@@ -43,12 +44,23 @@ func (h *Hub) Router() http.Handler {
 	return r
 }
 
-// ListenAndServe starts the HTTP server until ctx is cancelled.
+// ListenAndServe starts the HTTP or HTTPS server until ctx is cancelled.
+// When tls_cert_file and tls_key_file are set, serves HTTPS (WebSocket upgrades are WSS).
 func (h *Hub) ListenAndServe(ctx context.Context) error {
 	srv := &http.Server{
 		Addr:              h.cfg.ListenAddr,
 		Handler:           h.Router(),
 		ReadHeaderTimeout: 10 * time.Second,
+	}
+	tlsEnabled := h.cfg.TLSEnabled()
+	if tlsEnabled {
+		// Prefer HTTP/1.1 so control WebSocket upgrades work over TLS (WSS).
+		// Go's default ListenAndServeTLS enables HTTP/2 via ALPN, which breaks upgrades.
+		srv.TLSConfig = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			NextProtos: []string{"http/1.1"},
+		}
+		srv.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
 	}
 	stop := make(chan struct{})
 	go h.StartPresenceSweeper(stop)
@@ -60,8 +72,15 @@ func (h *Hub) ListenAndServe(ctx context.Context) error {
 			"hub_id", h.cfg.HubID,
 			"overlay_cidr", h.cfg.OverlayCIDR,
 			"role", "nat-bridge",
+			"tls", tlsEnabled,
 		)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		var err error
+		if tlsEnabled {
+			err = srv.ListenAndServeTLS(h.cfg.TLSCertFile, h.cfg.TLSKeyFile)
+		} else {
+			err = srv.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
 		close(errCh)

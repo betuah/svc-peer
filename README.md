@@ -68,7 +68,7 @@ sudo setcap cap_net_admin,cap_net_raw+ep ./bin/agent
 
 ## Run (local smoke)
 
-Example configs live under `configs/`.
+Example configs live under `configs/`. Local examples use plain HTTP; leave `tls_cert_file` / `tls_key_file` empty.
 
 ```bash
 go run ./cmd/hub -config configs/hub.example.yaml
@@ -82,6 +82,28 @@ Hub discovery:
 ```bash
 curl -s -H "Authorization: Bearer spt_dev_cam_warehouse_01_replace_me" \
   http://127.0.0.1:8080/api/v1/agents
+```
+
+## Hub TLS (HTTPS / WSS)
+
+For cloud or self-host production, configure PEM paths on the hub so REST and control WebSocket are TLS:
+
+| Knob | Process | Notes |
+|------|---------|-------|
+| `tls_cert_file` | hub | PEM certificate path; required with `tls_key_file` |
+| `tls_key_file` | hub | PEM private key path; required with `tls_cert_file` |
+| `hub_url` | agent | Use `https://…`; control channel upgrades to `wss://…/ws/v1/agent` |
+| `hub_tls_insecure_skip_verify` | agent | Default `false`. Set `true` only for local/dev self-signed certs |
+
+Both hub TLS paths must be set or both empty (empty = plain HTTP for local/dev). Compose: mount certs (see commented volume in `docker-compose.yml`) and set the paths in `configs/compose/hub.yaml`; point agent `hub_url` at `https://hub:8080`.
+
+```bash
+# Example: hub with TLS, agent verifying system roots (or skip-verify for self-signed)
+# hub: tls_cert_file + tls_key_file set
+# agent: hub_url: "https://127.0.0.1:8080"
+curl -s --cacert /path/to/ca.pem \
+  -H "Authorization: Bearer spt_dev_cam_warehouse_01_replace_me" \
+  https://127.0.0.1:8080/api/v1/agents
 ```
 
 Center agent local API (default bind `127.0.0.1:9100`):
@@ -145,9 +167,9 @@ Replace the example secrets in `configs/compose/*.yaml` before any shared or pro
 
 | File | Process |
 |------|---------|
-| `configs/hub.example.yaml` | Hub (`center_bootstrap`, overlay CIDR, `state_path`, STUN/relay URLs) |
-| `configs/agent-center.example.yaml` | Center agent (`center_bootstrap`, `edge_tokens`, `local_api_listen`) |
-| `configs/agent.example.yaml` | Edge agent (join token, `local_api_listen`) |
+| `configs/hub.example.yaml` | Hub (`center_bootstrap`, overlay CIDR, `state_path`, optional TLS, STUN/relay URLs) |
+| `configs/agent-center.example.yaml` | Center agent (`hub_url`, `center_bootstrap`, `edge_tokens`, `local_api_listen`) |
+| `configs/agent.example.yaml` | Edge agent (`hub_url`, join token, `local_api_listen`) |
 | `configs/agent-viewer.example.yaml` | Second edge example (different WG interface / local API port) |
 | `configs/relay.example.yaml` | Relay |
 | `configs/compose/*.yaml` | Compose service configs |

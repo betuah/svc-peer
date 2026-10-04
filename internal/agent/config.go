@@ -2,7 +2,9 @@ package agent
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 
 	"github.com/betuah/svc-peer/internal/protocol"
 	"gopkg.in/yaml.v3"
@@ -18,8 +20,12 @@ type EdgeTokenSeed struct {
 
 // Config is the agent configuration file.
 type Config struct {
+	// HubURL is the hub base URL (http:// or https://). https:// uses WSS for control WS.
 	HubURL string `yaml:"hub_url"`
 	HubID  string `yaml:"hub_id"`
+	// HubTLSInsecureSkipVerify skips hub TLS certificate verification.
+	// Default false (secure). Set true only for local/dev with self-signed certs.
+	HubTLSInsecureSkipVerify bool `yaml:"hub_tls_insecure_skip_verify"`
 	// Role is center | edge.
 	Role string `yaml:"role"`
 	// CenterBootstrap is required when role=center (shared with hub center_bootstrap).
@@ -81,6 +87,15 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if cfg.HubURL == "" {
 		return cfg, fmt.Errorf("hub_url is required")
+	}
+	u, err := url.Parse(cfg.HubURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return cfg, fmt.Errorf("hub_url must be an absolute http:// or https:// URL")
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+	default:
+		return cfg, fmt.Errorf("hub_url scheme must be http or https (got %q); https uses WSS for control", u.Scheme)
 	}
 	if cfg.Name == "" {
 		return cfg, fmt.Errorf("name is required")
