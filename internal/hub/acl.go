@@ -47,24 +47,44 @@ func pairKey(a, b string) string {
 
 // Grant adds a reciprocal A2A allowance. Hub is not in the dataplane path.
 func (s *GrantStore) Grant(agentA, agentB string) (*Grant, error) {
+	g, _, err := s.GrantWithID("", agentA, agentB)
+	return g, err
+}
+
+// GrantWithID adds a grant with an optional center-supplied id.
+// Same id+pair (or same pair when id is empty) is idempotent: created=false.
+func (s *GrantStore) GrantWithID(id, agentA, agentB string) (*Grant, bool, error) {
 	if agentA == "" || agentB == "" || agentA == agentB {
-		return nil, ErrGrantInvalid
+		return nil, false, ErrGrantInvalid
 	}
 	key := pairKey(agentA, agentB)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if id != "" {
+		if existing, ok := s.byID[id]; ok {
+			if pairKey(existing.AgentA, existing.AgentB) == key {
+				cp := *existing
+				return &cp, false, nil
+			}
+			return nil, false, ErrGrantExists
+		}
+	}
 	if _, exists := s.byPair[key]; exists {
-		return nil, ErrGrantExists
+		return nil, false, ErrGrantExists
+	}
+	if id == "" {
+		id = uuid.NewString()
 	}
 	g := &Grant{
-		ID:        uuid.NewString(),
+		ID:        id,
 		AgentA:    agentA,
 		AgentB:    agentB,
 		CreatedAt: time.Now().UTC(),
 	}
 	s.byID[g.ID] = g
 	s.byPair[key] = g.ID
-	return g, nil
+	cp := *g
+	return &cp, true, nil
 }
 
 // Revoke removes a grant by ID.

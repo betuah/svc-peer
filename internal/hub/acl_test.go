@@ -53,3 +53,24 @@ func TestGrantStoreRejectsSelfAndDuplicate(t *testing.T) {
 		t.Fatal("duplicate pair must fail")
 	}
 }
+
+func TestGrantStoreWithIDIdempotent(t *testing.T) {
+	g := NewGrantStore()
+	first, created, err := g.GrantWithID("g1", "e1", "e2")
+	if err != nil || !created {
+		t.Fatalf("create: created=%v err=%v", created, err)
+	}
+	again, created, err := g.GrantWithID("g1", "e1", "e2")
+	if err != nil || created {
+		t.Fatalf("idempotent: created=%v err=%v", created, err)
+	}
+	if again.ID != first.ID {
+		t.Fatalf("id mismatch: %s vs %s", again.ID, first.ID)
+	}
+	if _, _, err := g.GrantWithID("g1", "e3", "e4"); err != ErrGrantExists {
+		t.Fatalf("same id different pair: %v", err)
+	}
+	if _, _, err := g.GrantWithID("g2", "e2", "e1"); err != ErrGrantExists {
+		t.Fatalf("same pair different id: %v", err)
+	}
+}

@@ -116,7 +116,7 @@ func TestLocalAPICenterPeersFromHubAndWGStats(t *testing.T) {
 		},
 	}
 
-	local := httptest.NewServer(localapi.New(view, nil, nil).Handler())
+	local := httptest.NewServer(localapi.New(view, nil, nil, nil).Handler())
 	defer local.Close()
 
 	res, err := http.Get(local.URL + "/local/health")
@@ -190,7 +190,7 @@ func TestLocalAPIEdgeStatus(t *testing.T) {
 			"pk-c": {PublicKey: "pk-c", LastHandshake: hs, TransmitBytes: 3, ReceiveBytes: 4},
 		},
 	}
-	local := httptest.NewServer(localapi.New(view, nil, nil).Handler())
+	local := httptest.NewServer(localapi.New(view, nil, nil, nil).Handler())
 	defer local.Close()
 
 	res, err := http.Get(local.URL + "/local/status")

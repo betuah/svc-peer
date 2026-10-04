@@ -221,8 +221,10 @@ Center-authored grants add direct WireGuard peers beyond the default edge↔cent
 | | |
 |--|--|
 | Auth | `center_bootstrap` or management |
-| Request | `{ "agent_a_id": string, "agent_b_id": string }` |
-| Response | `201` GrantInfo |
+| Request | `{ "id"?: string, "agent_a_id": string, "agent_b_id": string }` |
+| Response | `201` GrantInfo (first create); `200` when the same `id`+pair already exists (idempotent re-sync) |
+
+Optional `id` is supplied by the center so durable local grants keep a stable identity across hub restarts. Empty `id` generates a new UUID.
 
 ### `GET /hub/grants`
 
@@ -239,6 +241,8 @@ Center-authored grants add direct WireGuard peers beyond the default edge↔cent
 | Response | `200` `{ "status":"revoked", "id":"..." }` |
 
 **GrantInfo:** `id`, `hub_id`, `agent_a_id`, `agent_b_id`, `created_at`.
+
+Hub grant state is an in-memory cache applied to netmap / punch / relay. The center persists grants under `{state_dir}/grants.json` and re-syncs on connect (`POST /hub/grants` + `DELETE` for local revokes).
 
 ---
 
@@ -382,6 +386,43 @@ Marks the entry revoked on disk, then best-effort hub revoke/sync.
 
 Forces a full push of active tokens and local revokes to the hub allowlist cache.
 
+### `GET /local/grants`
+
+| | |
+|--|--|
+| Role | `center` only |
+| Response | `200` `{ "grants": GrantView[] }` |
+
+Lists durable center-authored A2A grants (`active` and `revoked`). Each entry: `id`, `agent_a_id`, `agent_b_id`, `status`, `created_at`, optional `revoked_at`.
+
+### `POST /local/grants`
+
+| | |
+|--|--|
+| Role | `center` only |
+| Request | `{ "id"?: string, "agent_a_id": string, "agent_b_id": string }` |
+| Response | `201` GrantView |
+
+Grants direct WireGuard peer connectivity between two registered agent IDs on the same hub (beyond default edge↔center). Empty `id` is generated. Persists to `{state_dir}/grants.json`, then best-effort hub sync (`POST /hub/grants` with the same id). Hub rebuilds netmap so both agents receive the peer; punch/relay tickets are issued only for allowed pairs.
+
+### `DELETE /local/grants/{id}`
+
+| | |
+|--|--|
+| Role | `center` only |
+| Response | `200` `{ "status":"revoked", "id":"..." }` |
+
+Marks the grant revoked on disk, then best-effort hub revoke/sync.
+
+### `POST /local/grants/sync`
+
+| | |
+|--|--|
+| Role | `center` only |
+| Response | `200` `{ "hub_id", "upserted", "ids", "revoked" }` |
+
+Forces a full push of active grants and local revokes to the hub (center `center_bootstrap` bearer).
+
 ---
 
 ## Related code
@@ -392,4 +433,5 @@ Forces a full push of active tokens and local revokes to the hub allowlist cache
 | Protocol types | `internal/protocol/types.go`, `internal/protocol/messages.go` |
 | Agent local API | `internal/agent/localapi/` |
 | Center allowlist store | `internal/agent/allowlist/` |
+| Center grant store | `internal/agent/grants/` |
 | WG device stats | `internal/agent/wgdev/` (`PeerStats`) |

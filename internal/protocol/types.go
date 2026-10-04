@@ -142,7 +142,9 @@ type RotateTokenResponse struct {
 }
 
 // CreateGrantRequest is POST /hub/grants (center-authored; management break-glass also accepted).
+// Optional ID lets the center persist a stable grant id and re-sync after hub restart.
 type CreateGrantRequest struct {
+	ID       string `json:"id,omitempty"`
 	AgentAID string `json:"agent_a_id"`
 	AgentBID string `json:"agent_b_id"`
 }

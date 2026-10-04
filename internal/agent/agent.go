@@ -13,6 +13,7 @@ import (
 	"github.com/betuah/svc-peer/internal/agent/allowlist"
 	"github.com/betuah/svc-peer/internal/agent/dns"
 	"github.com/betuah/svc-peer/internal/agent/endpoint"
+	"github.com/betuah/svc-peer/internal/agent/grants"
 	"github.com/betuah/svc-peer/internal/agent/identity"
 	"github.com/betuah/svc-peer/internal/agent/localapi"
 	"github.com/betuah/svc-peer/internal/agent/pathmgr"
@@ -32,6 +33,7 @@ type Agent struct {
 	relay     *relayclient.Client
 	paths     *pathmgr.Manager
 	allowlist *allowlist.Store // center only
+	grants    *grants.Store    // center only
 	agentID   string
 	pubKey    string
 	privKey   string
@@ -63,6 +65,7 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 		return nil, err
 	}
 	var al *allowlist.Store
+	var gs *grants.Store
 	if cfg.Role == protocol.RoleCenter {
 		al, err = allowlist.Open(cfg.StateDir)
 		if err != nil {
@@ -75,6 +78,10 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 		if err := al.SeedFromConfig(seeds); err != nil {
 			return nil, fmt.Errorf("seed allowlist: %w", err)
 		}
+		gs, err = grants.Open(cfg.StateDir)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &Agent{
 		cfg:       cfg,
@@ -83,6 +90,7 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 		device:    dev,
 		dns:       dns.NewResolver(),
 		allowlist: al,
+		grants:    gs,
 		agentID:   agentID,
 		role:      cfg.Role,
 		privKey:   priv,
@@ -139,7 +147,8 @@ func (a *Agent) Run(ctx context.Context) error {
 	)
 
 	if a.cfg.LocalAPIListen != "" {
-		localSrv := localapi.New(localView{a: a}, localView{a: a}, a.log)
+		lv := localView{a: a}
+		localSrv := localapi.New(lv, lv, lv, a.log)
 		go func() {
 			if err := localSrv.Start(ctx, a.cfg.LocalAPIListen); err != nil && err != context.Canceled {
 				a.log.Error("local api stopped", "err", err)
@@ -154,6 +163,14 @@ func (a *Agent) Run(ctx context.Context) error {
 			return fmt.Errorf("sync allowlist: %w", err)
 		}
 		a.log.Info("synced edge allowlist to hub", "upserted", syncResp.Upserted, "revoked", syncResp.Revoked, "ids", syncResp.IDs)
+	}
+	// Center re-pushes durable A2A grants so hub netmap/punch/relay match after restart.
+	if a.cfg.Role == protocol.RoleCenter && a.grants != nil {
+		grantSync, err := a.SyncGrantsToHub(ctx)
+		if err != nil {
+			return fmt.Errorf("sync grants: %w", err)
+		}
+		a.log.Info("synced A2A grants to hub", "upserted", grantSync.Upserted, "revoked", grantSync.Revoked, "ids", grantSync.IDs)
 	}
 
 	if err := a.device.Up(wgdev.InterfaceConfig{
