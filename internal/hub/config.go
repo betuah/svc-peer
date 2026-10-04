@@ -28,6 +28,11 @@ type Config struct {
 	// across hub restarts. Empty disables durable state (in-memory only).
 	// Online presence is never persisted; center re-syncs allowlist on connect.
 	StatePath string `yaml:"state_path"`
+	// TLSCertFile and TLSKeyFile enable HTTPS for the hub REST API and WSS for
+	// control WebSocket upgrades. Leave both empty for plain HTTP (local/dev).
+	// Setting only one is an error.
+	TLSCertFile string `yaml:"tls_cert_file"`
+	TLSKeyFile  string `yaml:"tls_key_file"`
 }
 
 // DefaultConfig returns sensible MVP defaults.
@@ -46,6 +51,11 @@ func DefaultConfig() Config {
 	}
 }
 
+// TLSEnabled reports whether both TLS certificate and key paths are configured.
+func (c Config) TLSEnabled() bool {
+	return c.TLSCertFile != "" && c.TLSKeyFile != ""
+}
+
 // LoadConfig reads YAML from path and merges with defaults.
 func LoadConfig(path string) (Config, error) {
 	cfg := DefaultConfig()
@@ -56,23 +66,36 @@ func LoadConfig(path string) (Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("parse hub config: %w", err)
 	}
-	if cfg.HubID == "" {
-		return cfg, fmt.Errorf("hub_id is required")
-	}
-	if cfg.CenterBootstrap == "" {
-		return cfg, fmt.Errorf("center_bootstrap is required (shared with center agent config)")
-	}
-	if cfg.RelaySecret == "" {
-		return cfg, fmt.Errorf("relay_secret is required (HMAC for relay tickets; not an auth token)")
-	}
-	if cfg.OverlayCIDR == "" {
-		return cfg, fmt.Errorf("overlay_cidr is required")
-	}
-	if cfg.HeartbeatTimeoutSec <= 0 {
-		cfg.HeartbeatTimeoutSec = 45
-	}
-	if cfg.DNSSuffix == "" {
-		cfg.DNSSuffix = "peer.local"
+	if err := cfg.Validate(); err != nil {
+		return cfg, err
 	}
 	return cfg, nil
+}
+
+// Validate checks required fields and TLS path consistency.
+func (c *Config) Validate() error {
+	if c.HubID == "" {
+		return fmt.Errorf("hub_id is required")
+	}
+	if c.CenterBootstrap == "" {
+		return fmt.Errorf("center_bootstrap is required (shared with center agent config)")
+	}
+	if c.RelaySecret == "" {
+		return fmt.Errorf("relay_secret is required (HMAC for relay tickets; not an auth token)")
+	}
+	if c.OverlayCIDR == "" {
+		return fmt.Errorf("overlay_cidr is required")
+	}
+	if c.HeartbeatTimeoutSec <= 0 {
+		c.HeartbeatTimeoutSec = 45
+	}
+	if c.DNSSuffix == "" {
+		c.DNSSuffix = "peer.local"
+	}
+	certSet := c.TLSCertFile != ""
+	keySet := c.TLSKeyFile != ""
+	if certSet != keySet {
+		return fmt.Errorf("tls_cert_file and tls_key_file must both be set or both empty")
+	}
+	return nil
 }
