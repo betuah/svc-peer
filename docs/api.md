@@ -155,11 +155,11 @@ Default ACL: edges receive only the center; center receives all edges. Hub is no
 
 ### `PUT /hub/allowlist`
 
-Primary path for edge onboarding: center pushes join tokens to the hub cache.
+Primary path for edge onboarding: center pushes join tokens to the hub cache. Center remains the source of truth; the hub persists the allowlist (token hashes, not plaintext) under `state_path` so NAT’d enrollment can continue across hub restarts. On center connect/online, the center agent re-syncs this endpoint. Online presence is never taken from disk.
 
 | | |
 |--|--|
-| Auth | `center_bootstrap` (center must already be registered) |
+| Auth | `center_bootstrap` (center must already be registered, including restored from durable state) |
 | Request body | JSON |
 | Response | `200` |
 
