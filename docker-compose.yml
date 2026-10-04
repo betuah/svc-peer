@@ -8,6 +8,7 @@ services:
       - "8080:8080"
     volumes:
       - ./configs/compose/hub.yaml:/etc/svc-peer/config.yaml:ro
+      - hub-state:/var/lib/svc-peer
     restart: unless-stopped
 
   relay:
@@ -72,5 +73,6 @@ services:
     restart: unless-stopped
 
 volumes:
+  hub-state:
   center-state:
   edge-state:

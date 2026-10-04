@@ -6,8 +6,13 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/hub ./cmd/hub
 
+# Writable state dir for distroless nonroot (uid 65532).
+FROM debian:bookworm-slim AS prep
+RUN mkdir -p /var/lib/svc-peer && chown 65532:65532 /var/lib/svc-peer
+
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/hub /usr/local/bin/hub
+COPY --from=prep --chown=65532:65532 /var/lib/svc-peer /var/lib/svc-peer
 USER nonroot:nonroot
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/hub"]

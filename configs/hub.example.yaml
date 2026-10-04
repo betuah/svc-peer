@@ -20,3 +20,8 @@ relay_urls:
   - "udp://127.0.0.1:3478"
   - "ws://127.0.0.1:3479/relay"
 heartbeat_timeout_sec: 45
+
+# Durable hub membership + edge allowlist cache (JSON file).
+# Online presence is not persisted. Center remains token source of truth and
+# re-syncs via PUT /hub/allowlist on connect. Empty disables persistence.
+state_path: "./data/hub-state.json"

@@ -125,6 +125,9 @@ func (a *API) SyncAllowlist(w http.ResponseWriter, r *http.Request) {
 		ids = append(ids, rec.ID)
 	}
 	a.log.Info("center allowlist synced", "hub_id", a.cfg.HubID, "count", len(ids))
+	if a.hub != nil {
+		a.hub.persistOrLog()
+	}
 	writeJSON(w, http.StatusOK, protocol.AllowlistSyncResponse{
 		HubID:  a.cfg.HubID,
 		Upsert: len(ids),
@@ -148,6 +151,9 @@ func (a *API) CreateToken(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if a.hub != nil {
+		a.hub.persistOrLog()
 	}
 	writeJSON(w, http.StatusCreated, protocol.TokenInfo{
 		ID:        rec.ID,
@@ -181,6 +187,9 @@ func (a *API) RevokeToken(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if a.hub != nil {
+		a.hub.persistOrLog()
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked", "id": id})
 }
 
@@ -206,6 +215,9 @@ func (a *API) RotateToken(w http.ResponseWriter, r *http.Request) {
 		}
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if a.hub != nil {
+		a.hub.persistOrLog()
 	}
 	writeJSON(w, http.StatusOK, protocol.RotateTokenResponse{
 		ID:      rec.ID,
@@ -392,6 +404,9 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 		a.log.Info("agent registered", "hub_id", a.cfg.HubID, "agent_id", agent.ID, "role", role, "name", agent.Name, "first", true)
 	} else {
 		a.log.Info("agent reconnected", "hub_id", a.cfg.HubID, "agent_id", agent.ID, "role", role, "name", agent.Name)
+	}
+	if a.hub != nil {
+		a.hub.persistOrLog()
 	}
 
 	nm := a.netmap.ForAgent(agent.ID)

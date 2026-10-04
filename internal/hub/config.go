@@ -24,6 +24,10 @@ type Config struct {
 	RelayURLs   []string `yaml:"relay_urls"`
 	// HeartbeatTimeout is how long without heartbeat before an agent is offline.
 	HeartbeatTimeoutSec int `yaml:"heartbeat_timeout_sec"`
+	// StatePath is the JSON file used to persist allowlist cache + registered agents
+	// across hub restarts. Empty disables durable state (in-memory only).
+	// Online presence is never persisted; center re-syncs allowlist on connect.
+	StatePath string `yaml:"state_path"`
 }
 
 // DefaultConfig returns sensible MVP defaults.

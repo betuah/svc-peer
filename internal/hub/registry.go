@@ -328,6 +328,66 @@ func (r *Registry) SnapshotAgents() []*Agent {
 	return out
 }
 
+// RestoreAgents loads durable membership from disk. Agents are restored offline;
+// presence requires a fresh register/heartbeat. Overlay IPs are reserved in IPAM.
+func (r *Registry) RestoreAgents(agents []Agent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, in := range agents {
+		if in.ID == "" {
+			return errors.New("restore agent: agent_id required")
+		}
+		switch in.Role {
+		case protocol.RoleCenter, protocol.RoleEdge:
+		default:
+			return ErrInvalidRole
+		}
+		if _, exists := r.agents[in.ID]; exists {
+			return errors.New("restore agent: duplicate agent_id " + in.ID)
+		}
+		if in.PublicKey == "" {
+			return errors.New("restore agent: public_key required for " + in.ID)
+		}
+		if other, taken := r.byPubKey[in.PublicKey]; taken {
+			return errors.New("restore agent: public key already bound to " + other)
+		}
+		if !in.OverlayIP.IsValid() {
+			return errors.New("restore agent: overlay_ip required for " + in.ID)
+		}
+		if err := r.ipam.Reserve(in.OverlayIP.Addr()); err != nil {
+			return err
+		}
+		a := &Agent{
+			ID:           in.ID,
+			HubID:        r.hubID,
+			Role:         in.Role,
+			Name:         in.Name,
+			PublicKey:    in.PublicKey,
+			OverlayIP:    in.OverlayIP,
+			DNSName:      in.DNSName,
+			Tags:         append([]string(nil), in.Tags...),
+			Capabilities: append([]string(nil), in.Capabilities...),
+			Platform:     in.Platform,
+			WGBackend:    in.WGBackend,
+			Online:       false, // presence is ephemeral
+			TokenID:      in.TokenID,
+		}
+		if a.DNSName == "" && a.Name != "" {
+			a.DNSName = dnsName(a.Name, r.dnsSuffix)
+		}
+		r.agents[a.ID] = a
+		r.byPubKey[a.PublicKey] = a.ID
+		if a.Role == protocol.RoleCenter {
+			if r.centerID != "" && r.centerID != a.ID {
+				return ErrCenterExists
+			}
+			r.centerID = a.ID
+		}
+		r.revision++
+	}
+	return nil
+}
+
 func dnsName(name, suffix string) string {
 	return name + "." + suffix
 }
