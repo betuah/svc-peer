@@ -7,9 +7,7 @@ This document describes the APIs implemented in the repository today.
 
 Error responses use JSON `{"error":"<message>"}` unless noted.
 
-When hub `tls_cert_file` and `tls_key_file` are set, the hub serves **HTTPS**; agents should use `hub_url` with `https://` (control channel is **WSS**). Plain HTTP remains available when both TLS paths are empty (local/dev). See the root [README.md](../README.md) for config knobs and Compose cert mounts.
-
-For binaries, Docker images, and Compose ports, see the root [README.md](../README.md).
+When hub `tls_cert_file` and `tls_key_file` are set, the hub serves **HTTPS**; agents should use `hub_url` with `https://` (control channel is **WSS**). Plain HTTP remains available when both TLS paths are empty (local/dev). TLS knobs, Compose cert mounts, and ports: [deploy.md](./deploy.md). Architecture overview: [architecture.md](./architecture.md).
 
 ---
 
