@@ -5,6 +5,7 @@ package localapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/betuah/svc-peer/internal/agent/allowlist"
 	"github.com/betuah/svc-peer/internal/agent/wgdev"
 	"github.com/betuah/svc-peer/internal/protocol"
 	"github.com/go-chi/chi/v5"
@@ -37,24 +39,38 @@ type View interface {
 	PeerDeviceStats(publicKey string) (wgdev.PeerStats, bool, error)
 }
 
+// AllowlistManager is center-only join-token management backed by durable local state.
+type AllowlistManager interface {
+	ListAllowlist() ([]AllowlistEntryView, error)
+	CreateAllowlistEntry(req CreateAllowlistRequest) (AllowlistEntryView, error)
+	RevokeAllowlistEntry(id string) (AllowlistEntryView, error)
+	SyncAllowlist(ctx context.Context) (AllowlistSyncResult, error)
+}
+
 // Server is the agent-local HTTP API.
 type Server struct {
-	view View
-	log  *slog.Logger
-	srv  *http.Server
+	view      View
+	allowlist AllowlistManager
+	log       *slog.Logger
+	srv       *http.Server
 }
 
 // New constructs a local API server (not yet listening).
-func New(view View, log *slog.Logger) *Server {
+// allowlist may be nil; center allowlist routes then return 503.
+func New(view View, allowlist AllowlistManager, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	s := &Server{view: view, log: log}
+	s := &Server{view: view, allowlist: allowlist, log: log}
 	r := chi.NewRouter()
 	r.Get("/local/health", s.handleHealth)
 	r.Get("/local/status", s.handleStatus)
 	r.Get("/local/peers", s.handlePeers)
 	r.Get("/local/peers/{id}", s.handlePeerDetail)
+	r.Get("/local/allowlist", s.handleAllowlistList)
+	r.Post("/local/allowlist", s.handleAllowlistCreate)
+	r.Delete("/local/allowlist/{id}", s.handleAllowlistRevoke)
+	r.Post("/local/allowlist/sync", s.handleAllowlistSync)
 	s.srv = &http.Server{Handler: r}
 	return s
 }
@@ -195,6 +211,96 @@ func (s *Server) handlePeerDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeErr(w, http.StatusNotFound, "peer not found")
+}
+
+func (s *Server) requireCenterAllowlist(w http.ResponseWriter) bool {
+	if s.view.Role() != protocol.RoleCenter {
+		writeErr(w, http.StatusForbidden, "allowlist management is center-only")
+		return false
+	}
+	if s.allowlist == nil {
+		writeErr(w, http.StatusServiceUnavailable, "allowlist store unavailable")
+		return false
+	}
+	return true
+}
+
+func (s *Server) handleAllowlistList(w http.ResponseWriter, _ *http.Request) {
+	if !s.requireCenterAllowlist(w) {
+		return
+	}
+	entries, err := s.allowlist.ListAllowlist()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if entries == nil {
+		entries = []AllowlistEntryView{}
+	}
+	writeJSON(w, http.StatusOK, AllowlistResponse{Entries: entries})
+}
+
+func (s *Server) handleAllowlistCreate(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCenterAllowlist(w) {
+		return
+	}
+	var req CreateAllowlistRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+	}
+	entry, err := s.allowlist.CreateAllowlistEntry(req)
+	if err != nil {
+		if errors.Is(err, allowlist.ErrAlreadyExists) {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Best-effort hub sync after local persist.
+	if _, syncErr := s.allowlist.SyncAllowlist(r.Context()); syncErr != nil {
+		s.log.Warn("allowlist create persisted; hub sync failed", "id", entry.ID, "err", syncErr)
+	}
+	writeJSON(w, http.StatusCreated, entry)
+}
+
+func (s *Server) handleAllowlistRevoke(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCenterAllowlist(w) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id required")
+		return
+	}
+	entry, err := s.allowlist.RevokeAllowlistEntry(id)
+	if err != nil {
+		if errors.Is(err, allowlist.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "token not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if _, syncErr := s.allowlist.SyncAllowlist(r.Context()); syncErr != nil {
+		s.log.Warn("allowlist revoke persisted; hub sync failed", "id", id, "err", syncErr)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked", "id": entry.ID})
+}
+
+func (s *Server) handleAllowlistSync(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCenterAllowlist(w) {
+		return
+	}
+	res, err := s.allowlist.SyncAllowlist(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *Server) buildPeers(ctx context.Context) ([]PeerView, error) {

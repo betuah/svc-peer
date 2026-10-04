@@ -279,6 +279,14 @@ No authentication. Intended for loopback / host-local tooling only.
 
 Field `tx_rx_source` is always `"wireguard_device"` when counters are present. The hub is not used for TX/RX.
 
+### Center allowlist (join tokens)
+
+Center-only. Edge callers receive `403`. Network management stays on the center agent — not the main business app.
+
+Durable state: `{state_dir}/allowlist.json` (alongside `agent_id`). Optional YAML `edge_tokens` are seeded into that file on center start (missing ids inserted; active ids updated; revoked ids are not resurrected).
+
+On center connect and after local create/revoke, the agent syncs to the hub: `PUT /hub/allowlist` for active tokens and `DELETE /hub/tokens/{id}` for revoked ids.
+
 ### `GET /local/health`
 
 | Field | Type | Description |
@@ -339,6 +347,43 @@ Field `tx_rx_source` is always `"wireguard_device"` when counters are present. T
 
 Same body as one `PeerView`. `404` if the peer is not in the local view.
 
+### `GET /local/allowlist`
+
+| | |
+|--|--|
+| Role | `center` only |
+| Response | `200` `{ "entries": AllowlistEntryView[] }` |
+
+Secrets are redacted (`token` omitted). Each entry includes `id`, `label`, `tags`, `status` (`active` \| `revoked`), `created_at`, and optional `revoked_at`.
+
+### `POST /local/allowlist`
+
+| | |
+|--|--|
+| Role | `center` only |
+| Request | `{ "id"?: string, "token"?: string, "label"?: string, "tags"?: string[] }` |
+| Response | `201` AllowlistEntryView including `token` secret |
+
+Empty `id` / `token` are generated. Persists to `{state_dir}/allowlist.json`, then best-effort hub sync.
+
+### `DELETE /local/allowlist/{id}`
+
+| | |
+|--|--|
+| Role | `center` only |
+| Response | `200` `{ "status":"revoked", "id":"..." }` |
+
+Marks the entry revoked on disk, then best-effort hub revoke/sync.
+
+### `POST /local/allowlist/sync`
+
+| | |
+|--|--|
+| Role | `center` only |
+| Response | `200` `{ "hub_id", "upserted", "ids", "revoked" }` |
+
+Forces a full push of active tokens and local revokes to the hub allowlist cache.
+
 ---
 
 ## Related code
@@ -348,4 +393,5 @@ Same body as one `PeerView`. `404` if the peer is not in the local view.
 | Hub routes | `internal/hub/server.go`, `internal/hub/api.go` |
 | Protocol types | `internal/protocol/types.go`, `internal/protocol/messages.go` |
 | Agent local API | `internal/agent/localapi/` |
+| Center allowlist store | `internal/agent/allowlist/` |
 | WG device stats | `internal/agent/wgdev/` (`PeerStats`) |

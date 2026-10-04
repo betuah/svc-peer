@@ -2,6 +2,38 @@ package localapi
 
 import "time"
 
+// AllowlistEntryView is one center-managed edge join token (secret redacted unless create).
+type AllowlistEntryView struct {
+	ID        string     `json:"id"`
+	Token     string     `json:"token,omitempty"` // secret: only on create response
+	Label     string     `json:"label,omitempty"`
+	Tags      []string   `json:"tags,omitempty"`
+	Status    string     `json:"status"` // active | revoked
+	CreatedAt time.Time  `json:"created_at"`
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+}
+
+// AllowlistResponse is GET /local/allowlist.
+type AllowlistResponse struct {
+	Entries []AllowlistEntryView `json:"entries"`
+}
+
+// CreateAllowlistRequest is POST /local/allowlist.
+type CreateAllowlistRequest struct {
+	ID    string   `json:"id,omitempty"`
+	Token string   `json:"token,omitempty"` // empty → generate
+	Label string   `json:"label,omitempty"`
+	Tags  []string `json:"tags,omitempty"`
+}
+
+// AllowlistSyncResult is POST /local/allowlist/sync (and internal center→hub sync).
+type AllowlistSyncResult struct {
+	HubID    string   `json:"hub_id,omitempty"`
+	Upserted int      `json:"upserted"`
+	IDs      []string `json:"ids,omitempty"`
+	Revoked  int      `json:"revoked"`
+}
+
 // HealthResponse is GET /local/health.
 type HealthResponse struct {
 	Status  string `json:"status"`

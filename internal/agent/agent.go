@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/betuah/svc-peer/internal/agent/allowlist"
 	"github.com/betuah/svc-peer/internal/agent/dns"
 	"github.com/betuah/svc-peer/internal/agent/endpoint"
 	"github.com/betuah/svc-peer/internal/agent/identity"
@@ -23,18 +24,19 @@ import (
 
 // Agent is the local peer process: register with hub, apply netmap, maintain WG device.
 type Agent struct {
-	cfg     Config
-	log     *slog.Logger
-	client  *HubClient
-	device  wgdev.Device
-	dns     *dns.Resolver
-	relay   *relayclient.Client
-	paths   *pathmgr.Manager
-	agentID string
-	pubKey  string
-	privKey string
-	stun    []string
-	relays  []string
+	cfg       Config
+	log       *slog.Logger
+	client    *HubClient
+	device    wgdev.Device
+	dns       *dns.Resolver
+	relay     *relayclient.Client
+	paths     *pathmgr.Manager
+	allowlist *allowlist.Store // center only
+	agentID   string
+	pubKey    string
+	privKey   string
+	stun      []string
+	relays    []string
 
 	mu            sync.RWMutex
 	hubID         string
@@ -60,16 +62,31 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	var al *allowlist.Store
+	if cfg.Role == protocol.RoleCenter {
+		al, err = allowlist.Open(cfg.StateDir)
+		if err != nil {
+			return nil, err
+		}
+		seeds := make([]allowlist.Seed, 0, len(cfg.EdgeTokens))
+		for _, t := range cfg.EdgeTokens {
+			seeds = append(seeds, allowlist.Seed{ID: t.ID, Token: t.Token, Label: t.Label, Tags: t.Tags})
+		}
+		if err := al.SeedFromConfig(seeds); err != nil {
+			return nil, fmt.Errorf("seed allowlist: %w", err)
+		}
+	}
 	return &Agent{
-		cfg:     cfg,
-		log:     log,
-		client:  NewHubClient(cfg.HubURL, cfg.AuthCredential(), cfg.HubTLSInsecureSkipVerify, log),
-		device:  dev,
-		dns:     dns.NewResolver(),
-		agentID: agentID,
-		role:    cfg.Role,
-		privKey: priv,
-		pubKey:  pub,
+		cfg:       cfg,
+		log:       log,
+		client:    NewHubClient(cfg.HubURL, cfg.AuthCredential(), cfg.HubTLSInsecureSkipVerify, log),
+		device:    dev,
+		dns:       dns.NewResolver(),
+		allowlist: al,
+		agentID:   agentID,
+		role:      cfg.Role,
+		privKey:   priv,
+		pubKey:    pub,
 	}, nil
 }
 
@@ -122,7 +139,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	)
 
 	if a.cfg.LocalAPIListen != "" {
-		localSrv := localapi.New(localView{a: a}, a.log)
+		localSrv := localapi.New(localView{a: a}, localView{a: a}, a.log)
 		go func() {
 			if err := localSrv.Start(ctx, a.cfg.LocalAPIListen); err != nil && err != context.Canceled {
 				a.log.Error("local api stopped", "err", err)
@@ -131,18 +148,12 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 
 	// Center syncs edge join-token allowlist to thin hub (primary edge onboarding path).
-	if a.cfg.Role == protocol.RoleCenter && len(a.cfg.EdgeTokens) > 0 {
-		tokens := make([]protocol.AllowlistToken, 0, len(a.cfg.EdgeTokens))
-		for _, t := range a.cfg.EdgeTokens {
-			tokens = append(tokens, protocol.AllowlistToken{
-				ID: t.ID, Token: t.Token, Label: t.Label, Tags: t.Tags,
-			})
-		}
-		syncResp, err := a.client.SyncAllowlist(ctx, tokens)
+	if a.cfg.Role == protocol.RoleCenter && a.allowlist != nil {
+		syncResp, err := a.SyncAllowlistToHub(ctx)
 		if err != nil {
 			return fmt.Errorf("sync allowlist: %w", err)
 		}
-		a.log.Info("synced edge allowlist to hub", "count", syncResp.Upsert, "ids", syncResp.IDs)
+		a.log.Info("synced edge allowlist to hub", "upserted", syncResp.Upserted, "revoked", syncResp.Revoked, "ids", syncResp.IDs)
 	}
 
 	if err := a.device.Up(wgdev.InterfaceConfig{
