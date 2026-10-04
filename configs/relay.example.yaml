@@ -1,0 +1,5 @@
+# svc-peer relay example configuration
+udp_listen_addr: ":3478"
+# HTTP/WS listens on a separate port when equal to UDP (scaffold default :3479).
+http_listen_addr: ":3479"
+hub_url: "http://127.0.0.1:8080"

@@ -1,0 +1,11 @@
+# svc-peer agent example configuration
+hub_url: "http://127.0.0.1:8080"
+# Long-lived agent token from POST /hub/tokens (hub_secret) or hub pre_seed_tokens.
+token: "spt_dev_cam_warehouse_01_replace_me"
+name: "cam-warehouse-01"
+tags: ["warehouse", "camera"]
+capabilities: ["video/rtsp", "video/srt"]
+wg_backend: "auto" # auto | kernel | userspace
+wg_interface: "sp0"
+wg_listen_port: 51820
+heartbeat_sec: 15

@@ -1,0 +1,23 @@
+# svc-peer hub example configuration
+listen_addr: ":8080"
+hub_secret: "change-me-hub-secret"
+overlay_cidr: "10.10.0.0/16"
+dns_suffix: "peer.local"
+stun_urls:
+  - "stun:stun.l.google.com:19302"
+relay_urls:
+  - "udp://127.0.0.1:3478"
+  - "ws://127.0.0.1:3479/relay"
+heartbeat_timeout_sec: 45
+
+# Optional pre-seeded agent tokens (same store as POST /hub/tokens).
+# Place the raw token value into the agent config `token` field.
+pre_seed_tokens:
+  - id: "seed-cam-01"
+    token: "spt_dev_cam_warehouse_01_replace_me"
+    label: "cam-warehouse-01"
+    tags: ["warehouse", "camera"]
+  - id: "seed-viewer-01"
+    token: "spt_dev_viewer_01_replace_me"
+    label: "viewer-01"
+    tags: ["viewer"]
