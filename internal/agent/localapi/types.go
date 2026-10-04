@@ -34,6 +34,36 @@ type AllowlistSyncResult struct {
 	Revoked  int      `json:"revoked"`
 }
 
+// GrantView is one center-authored A2A grant.
+type GrantView struct {
+	ID        string     `json:"id"`
+	AgentAID  string     `json:"agent_a_id"`
+	AgentBID  string     `json:"agent_b_id"`
+	Status    string     `json:"status"` // active | revoked
+	CreatedAt time.Time  `json:"created_at"`
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+}
+
+// GrantsResponse is GET /local/grants.
+type GrantsResponse struct {
+	Grants []GrantView `json:"grants"`
+}
+
+// CreateGrantRequest is POST /local/grants.
+type CreateGrantRequest struct {
+	ID       string `json:"id,omitempty"`
+	AgentAID string `json:"agent_a_id"`
+	AgentBID string `json:"agent_b_id"`
+}
+
+// GrantsSyncResult is POST /local/grants/sync (and internal center→hub sync).
+type GrantsSyncResult struct {
+	HubID    string   `json:"hub_id,omitempty"`
+	Upserted int      `json:"upserted"`
+	IDs      []string `json:"ids,omitempty"`
+	Revoked  int      `json:"revoked"`
+}
+
 // HealthResponse is GET /local/health.
 type HealthResponse struct {
 	Status  string `json:"status"`

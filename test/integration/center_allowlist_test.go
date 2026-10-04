@@ -88,7 +88,7 @@ func TestCenterLocalAllowlistCreateListRevokeSync(t *testing.T) {
 		role: protocol.RoleCenter, agentID: centerID, hubID: "hub-center-allowlist",
 		name: "center", hubConn: true, hubURL: srv.URL, token: boot,
 	}
-	local := httptest.NewServer(localapi.New(view, mgr, nil).Handler())
+	local := httptest.NewServer(localapi.New(view, mgr, nil, nil).Handler())
 	defer local.Close()
 
 	// Create join token via local API (secret returned once).

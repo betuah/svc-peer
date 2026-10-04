@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/betuah/svc-peer/internal/agent/allowlist"
+	"github.com/betuah/svc-peer/internal/agent/grants"
 	"github.com/betuah/svc-peer/internal/agent/wgdev"
 	"github.com/betuah/svc-peer/internal/protocol"
 )
@@ -71,7 +72,7 @@ func TestCenterLocalPeersIncludesTXRX(t *testing.T) {
 			"pk-edge": {PublicKey: "pk-edge", Endpoint: "203.0.113.5:51820", LastHandshake: hs, ReceiveBytes: 10, TransmitBytes: 20},
 		},
 	}
-	s := New(v, nil, nil)
+	s := New(v, nil, nil, nil)
 	res := httptest.NewRecorder()
 	s.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/local/peers", nil))
 	if res.Code != http.StatusOK {
@@ -120,7 +121,7 @@ func TestEdgeLocalStatusAndPeers(t *testing.T) {
 			"pk-center": {PublicKey: "pk-center", LastHandshake: hs, ReceiveBytes: 5, TransmitBytes: 7, Endpoint: "198.51.100.1:51820"},
 		},
 	}
-	s := New(v, nil, nil)
+	s := New(v, nil, nil, nil)
 
 	res := httptest.NewRecorder()
 	s.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/local/status", nil))
@@ -163,7 +164,7 @@ func TestEdgeLocalStatusAndPeers(t *testing.T) {
 }
 
 func TestLocalHealth(t *testing.T) {
-	s := New(&fakeView{role: protocol.RoleCenter, agentID: "c1", hubID: "h1"}, nil, nil)
+	s := New(&fakeView{role: protocol.RoleCenter, agentID: "c1", hubID: "h1"}, nil, nil, nil)
 	res := httptest.NewRecorder()
 	s.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/local/health", nil))
 	if res.Code != http.StatusOK {
@@ -232,7 +233,7 @@ func (f *fakeAllowlist) SyncAllowlist(context.Context) (AllowlistSyncResult, err
 
 func TestCenterAllowlistCRUD(t *testing.T) {
 	al := &fakeAllowlist{}
-	s := New(&fakeView{role: protocol.RoleCenter, agentID: "c1", hubID: "hub-main"}, al, nil)
+	s := New(&fakeView{role: protocol.RoleCenter, agentID: "c1", hubID: "hub-main"}, al, nil, nil)
 
 	res := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/local/allowlist", strings.NewReader(`{"label":"cam","tags":["warehouse"]}`))
@@ -279,9 +280,111 @@ func TestCenterAllowlistCRUD(t *testing.T) {
 }
 
 func TestEdgeAllowlistForbidden(t *testing.T) {
-	s := New(&fakeView{role: protocol.RoleEdge, agentID: "e1"}, &fakeAllowlist{}, nil)
+	s := New(&fakeView{role: protocol.RoleEdge, agentID: "e1"}, &fakeAllowlist{}, nil, nil)
 	res := httptest.NewRecorder()
 	s.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/local/allowlist", nil))
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("status=%d", res.Code)
+	}
+}
+
+type fakeGrants struct {
+	entries []GrantView
+	syncs   int
+	syncErr error
+}
+
+func (f *fakeGrants) ListGrants() ([]GrantView, error) {
+	out := make([]GrantView, len(f.entries))
+	copy(out, f.entries)
+	return out, nil
+}
+
+func (f *fakeGrants) CreateGrant(req CreateGrantRequest) (GrantView, error) {
+	id := req.ID
+	if id == "" {
+		id = "grant-1"
+	}
+	e := GrantView{
+		ID: id, AgentAID: req.AgentAID, AgentBID: req.AgentBID,
+		Status: "active", CreatedAt: time.Unix(1700000000, 0).UTC(),
+	}
+	f.entries = append(f.entries, e)
+	return e, nil
+}
+
+func (f *fakeGrants) RevokeGrant(id string) (GrantView, error) {
+	for i := range f.entries {
+		if f.entries[i].ID == id {
+			f.entries[i].Status = "revoked"
+			t := time.Unix(1700001000, 0).UTC()
+			f.entries[i].RevokedAt = &t
+			return f.entries[i], nil
+		}
+	}
+	return GrantView{}, grants.ErrNotFound
+}
+
+func (f *fakeGrants) SyncGrants(context.Context) (GrantsSyncResult, error) {
+	f.syncs++
+	if f.syncErr != nil {
+		return GrantsSyncResult{}, f.syncErr
+	}
+	return GrantsSyncResult{HubID: "hub-main", Upserted: 1, IDs: []string{"grant-1"}, Revoked: 0}, nil
+}
+
+func TestCenterGrantsCRUD(t *testing.T) {
+	gm := &fakeGrants{}
+	s := New(&fakeView{role: protocol.RoleCenter, agentID: "c1", hubID: "hub-main"}, nil, gm, nil)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/local/grants", strings.NewReader(`{"agent_a_id":"e1","agent_b_id":"e2"}`))
+	req.Header.Set("Content-Type", "application/json")
+	s.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("create=%d body=%s", res.Code, res.Body.String())
+	}
+	var created GrantView
+	if err := json.NewDecoder(res.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.ID == "" || created.AgentAID != "e1" || created.Status != "active" {
+		t.Fatalf("created=%+v", created)
+	}
+	if gm.syncs != 1 {
+		t.Fatalf("expected sync after create, got %d", gm.syncs)
+	}
+
+	res = httptest.NewRecorder()
+	s.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/local/grants", nil))
+	if res.Code != http.StatusOK {
+		t.Fatalf("list=%d", res.Code)
+	}
+	var listed GrantsResponse
+	if err := json.NewDecoder(res.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Grants) != 1 {
+		t.Fatalf("list=%+v", listed.Grants)
+	}
+
+	res = httptest.NewRecorder()
+	s.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodDelete, "/local/grants/"+created.ID, nil))
+	if res.Code != http.StatusOK {
+		t.Fatalf("revoke=%d body=%s", res.Code, res.Body.String())
+	}
+
+	res = httptest.NewRecorder()
+	s.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodPost, "/local/grants/sync", nil))
+	if res.Code != http.StatusOK {
+		t.Fatalf("sync=%d", res.Code)
+	}
+}
+
+func TestEdgeGrantsForbidden(t *testing.T) {
+	s := New(&fakeView{role: protocol.RoleEdge, agentID: "e1"}, nil, &fakeGrants{}, nil)
+	res := httptest.NewRecorder()
+	s.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/local/grants", nil))
 	if res.Code != http.StatusForbidden {
 		t.Fatalf("status=%d", res.Code)
 	}

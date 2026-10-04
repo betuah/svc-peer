@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/betuah/svc-peer/internal/agent/allowlist"
+	"github.com/betuah/svc-peer/internal/agent/grants"
 	"github.com/betuah/svc-peer/internal/agent/wgdev"
 	"github.com/betuah/svc-peer/internal/protocol"
 	"github.com/go-chi/chi/v5"
@@ -47,21 +48,30 @@ type AllowlistManager interface {
 	SyncAllowlist(ctx context.Context) (AllowlistSyncResult, error)
 }
 
+// GrantManager is center-only A2A grant management backed by durable local state.
+type GrantManager interface {
+	ListGrants() ([]GrantView, error)
+	CreateGrant(req CreateGrantRequest) (GrantView, error)
+	RevokeGrant(id string) (GrantView, error)
+	SyncGrants(ctx context.Context) (GrantsSyncResult, error)
+}
+
 // Server is the agent-local HTTP API.
 type Server struct {
 	view      View
 	allowlist AllowlistManager
+	grants    GrantManager
 	log       *slog.Logger
 	srv       *http.Server
 }
 
 // New constructs a local API server (not yet listening).
-// allowlist may be nil; center allowlist routes then return 503.
-func New(view View, allowlist AllowlistManager, log *slog.Logger) *Server {
+// allowlist and grants may be nil; center-only routes then return 503.
+func New(view View, allowlist AllowlistManager, grantMgr GrantManager, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	s := &Server{view: view, allowlist: allowlist, log: log}
+	s := &Server{view: view, allowlist: allowlist, grants: grantMgr, log: log}
 	r := chi.NewRouter()
 	r.Get("/local/health", s.handleHealth)
 	r.Get("/local/status", s.handleStatus)
@@ -71,6 +81,10 @@ func New(view View, allowlist AllowlistManager, log *slog.Logger) *Server {
 	r.Post("/local/allowlist", s.handleAllowlistCreate)
 	r.Delete("/local/allowlist/{id}", s.handleAllowlistRevoke)
 	r.Post("/local/allowlist/sync", s.handleAllowlistSync)
+	r.Get("/local/grants", s.handleGrantsList)
+	r.Post("/local/grants", s.handleGrantsCreate)
+	r.Delete("/local/grants/{id}", s.handleGrantsRevoke)
+	r.Post("/local/grants/sync", s.handleGrantsSync)
 	s.srv = &http.Server{Handler: r}
 	return s
 }
@@ -296,6 +310,97 @@ func (s *Server) handleAllowlistSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := s.allowlist.SyncAllowlist(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) requireCenterGrants(w http.ResponseWriter) bool {
+	if s.view.Role() != protocol.RoleCenter {
+		writeErr(w, http.StatusForbidden, "grant management is center-only")
+		return false
+	}
+	if s.grants == nil {
+		writeErr(w, http.StatusServiceUnavailable, "grant store unavailable")
+		return false
+	}
+	return true
+}
+
+func (s *Server) handleGrantsList(w http.ResponseWriter, _ *http.Request) {
+	if !s.requireCenterGrants(w) {
+		return
+	}
+	list, err := s.grants.ListGrants()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if list == nil {
+		list = []GrantView{}
+	}
+	writeJSON(w, http.StatusOK, GrantsResponse{Grants: list})
+}
+
+func (s *Server) handleGrantsCreate(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCenterGrants(w) {
+		return
+	}
+	var req CreateGrantRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	entry, err := s.grants.CreateGrant(req)
+	if err != nil {
+		if errors.Is(err, grants.ErrAlreadyExists) {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		if errors.Is(err, grants.ErrInvalid) {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, syncErr := s.grants.SyncGrants(r.Context()); syncErr != nil {
+		s.log.Warn("grant create persisted; hub sync failed", "id", entry.ID, "err", syncErr)
+	}
+	writeJSON(w, http.StatusCreated, entry)
+}
+
+func (s *Server) handleGrantsRevoke(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCenterGrants(w) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id required")
+		return
+	}
+	entry, err := s.grants.RevokeGrant(id)
+	if err != nil {
+		if errors.Is(err, grants.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "grant not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if _, syncErr := s.grants.SyncGrants(r.Context()); syncErr != nil {
+		s.log.Warn("grant revoke persisted; hub sync failed", "id", id, "err", syncErr)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked", "id": entry.ID})
+}
+
+func (s *Server) handleGrantsSync(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCenterGrants(w) {
+		return
+	}
+	res, err := s.grants.SyncGrants(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return

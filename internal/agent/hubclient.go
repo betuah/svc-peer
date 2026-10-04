@@ -128,6 +128,33 @@ func (c *HubClient) ListAgents(ctx context.Context) (*protocol.AgentsListRespons
 	return &out, nil
 }
 
+// CreateGrant calls POST /hub/grants (center_bootstrap or management).
+func (c *HubClient) CreateGrant(ctx context.Context, req protocol.CreateGrantRequest) (*protocol.GrantInfo, error) {
+	var out protocol.GrantInfo
+	if err := c.doJSON(ctx, http.MethodPost, "/hub/grants", req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListGrants calls GET /hub/grants.
+func (c *HubClient) ListGrants(ctx context.Context) (*protocol.GrantsListResponse, error) {
+	var out protocol.GrantsListResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/hub/grants", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// RevokeGrant calls DELETE /hub/grants/{id}.
+func (c *HubClient) RevokeGrant(ctx context.Context, id string) error {
+	if id == "" {
+		return fmt.Errorf("grant id required")
+	}
+	var out map[string]string
+	return c.doJSON(ctx, http.MethodDelete, "/hub/grants/"+url.PathEscape(id), nil, &out)
+}
+
 // Connected reports whether the control WebSocket is currently open.
 func (c *HubClient) Connected() bool {
 	c.mu.Lock()

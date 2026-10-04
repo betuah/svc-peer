@@ -48,7 +48,7 @@ Recommended bring-up order:
 1. Start hub (with `hub_id`, `center_bootstrap`, overlay CIDR, `state_path`, STUN/relay URLs).
 2. Start relay (shared `relay_secret` with hub).
 3. Start center agent (`role: center`, matching `center_bootstrap`); it registers, claims the sole center slot, loads durable join-token state from `{state_dir}/allowlist.json` (optional YAML `edge_tokens` seed), and syncs active tokens via `PUT /hub/allowlist`.
-4. Create or revoke edge join tokens on the center local API (`/local/allowlist`), or rely on seeded YAML tokens. Start edge agents with those tokens (`role: edge`).
+4. Create or revoke edge join tokens on the center local API (`/local/allowlist`), or rely on seeded YAML tokens. Start edge agents with those tokens (`role: edge`). Optional edge↔edge (or other non-default) direct WG peers are center-authored via `/local/grants` (synced to hub `/hub/grants`).
 5. Confirm direct WireGuard edge↔center; relay is used only if underlay/STUN/punch fails.
 
 Path selection for an allowed peer: **private/underlay host → STUN reflexive / hole punch → relay fallback**.

@@ -79,7 +79,7 @@ Per `hub_id`:
 | Center → Edge | Allow (direct WG) |
 | Edge → Edge | Deny (no peer; no hub hairpin) |
 | Hub as app next-hop | Not default |
-| Extra A2A | Center-authored grant → direct WG peers only |
+| Extra A2A | Center-authored grant (`/local/grants` → hub `/hub/grants`) → direct WG peers only |
 
 Exactly one center per `hub_id`. The hub rejects a second center claim. A hub WireGuard identity may exist for ops; it must not be the default edge↔center app path.
 
@@ -89,7 +89,7 @@ Netmap rules:
 2. Default edge peers = `[center]` only.
 3. Default center peers = all edges on that hub.
 4. Denied pairs: no peer, no AllowedIPs, no A→hub→B hairpin.
-5. Grant/revoke rebuilds peers on the next netmap revision.
+5. Grant/revoke rebuilds peers on the next netmap revision. Center persists grants in `{state_dir}/grants.json` and syncs to the hub with `center_bootstrap` (same auth pattern as allowlist sync). Punch and relay tickets are issued only for allowed pairs (edge↔center or an active grant).
 6. MagicDNS name→IP may list agents without granting dataplane permission.
 
 ## Identity and bootstrap
@@ -150,7 +150,7 @@ Validate `center_bootstrap` (sole center claim); validate join tokens against ce
 
 ### Agent
 
-Local Agent ID generation + persistence; hub client (register, WS control, apply netmap); WireGuard device (prefer kernel WG via `wgctrl` / netlink; fall back to `wireguard-go`); STUN / hole punch / relay client; agent-local MagicDNS from netmap. Center-only: durable join-token store (`internal/agent/allowlist`), create/revoke via `/local/allowlist`, ACL/membership, allowlist sync to hub. Local HTTP (`/local/*`) also covers peers, status, TX/RX from WG device stats — not the hub control plane.
+Local Agent ID generation + persistence; hub client (register, WS control, apply netmap); WireGuard device (prefer kernel WG via `wgctrl` / netlink; fall back to `wireguard-go`); STUN / hole punch / relay client; agent-local MagicDNS from netmap. Center-only: durable join-token store (`internal/agent/allowlist`) and A2A grant store (`internal/agent/grants`); create/revoke via `/local/allowlist` and `/local/grants`; sync both to the hub. Local HTTP (`/local/*`) also covers peers, status, TX/RX from WG device stats — not the hub control plane.
 
 ### Relay
 

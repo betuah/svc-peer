@@ -117,3 +117,41 @@ func (v localView) RevokeAllowlistEntry(id string) (localapi.AllowlistEntryView,
 func (v localView) SyncAllowlist(ctx context.Context) (localapi.AllowlistSyncResult, error) {
 	return v.a.SyncAllowlistToHub(ctx)
 }
+
+func (v localView) ListGrants() ([]localapi.GrantView, error) {
+	if v.a.grants == nil {
+		return nil, fmt.Errorf("grant store unavailable (center role required)")
+	}
+	entries := v.a.grants.List()
+	out := make([]localapi.GrantView, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, grantToView(e))
+	}
+	return out, nil
+}
+
+func (v localView) CreateGrant(req localapi.CreateGrantRequest) (localapi.GrantView, error) {
+	if v.a.grants == nil {
+		return localapi.GrantView{}, fmt.Errorf("grant store unavailable (center role required)")
+	}
+	e, err := v.a.grants.Add(req.ID, req.AgentAID, req.AgentBID)
+	if err != nil {
+		return localapi.GrantView{}, err
+	}
+	return grantToView(e), nil
+}
+
+func (v localView) RevokeGrant(id string) (localapi.GrantView, error) {
+	if v.a.grants == nil {
+		return localapi.GrantView{}, fmt.Errorf("grant store unavailable (center role required)")
+	}
+	e, err := v.a.grants.Revoke(id)
+	if err != nil {
+		return localapi.GrantView{}, err
+	}
+	return grantToView(e), nil
+}
+
+func (v localView) SyncGrants(ctx context.Context) (localapi.GrantsSyncResult, error) {
+	return v.a.SyncGrantsToHub(ctx)
+}
