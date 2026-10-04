@@ -5,7 +5,8 @@ import "time"
 
 // PeerConfig is a WireGuard peer entry in a netmap revision.
 type PeerConfig struct {
-	AgentID             string   `json:"agent_id"`
+	PeerID              string   `json:"peer_id"`
+	AgentID             string   `json:"agent_id,omitempty"` // same as peer_id for agents; "hub" for hub peer
 	PublicKey           string   `json:"public_key"`
 	Endpoint            string   `json:"endpoint,omitempty"`
 	AllowedIPs          []string `json:"allowed_ips"`
@@ -45,18 +46,20 @@ type RegisterRequest struct {
 
 // RegisterResponse is returned after a successful register (first or reconnect).
 type RegisterResponse struct {
-	AgentID        string       `json:"agent_id"`
-	OverlayIP      string       `json:"overlay_ip"`
-	DNSName        string       `json:"dns_name"`
-	NetmapRevision uint64       `json:"netmap_revision"`
-	Peers          []PeerConfig `json:"peers"`
+	AgentID        string            `json:"agent_id"`
+	HubID          string            `json:"hub_id"`
+	OverlayIP      string            `json:"overlay_ip"`
+	DNSName        string            `json:"dns_name"`
+	NetmapRevision uint64            `json:"netmap_revision"`
+	Peers          []PeerConfig      `json:"peers"`
 	DNSMap         map[string]string `json:"dns_map,omitempty"` // name → overlay IP for MagicDNS
-	STUNURLs       []string     `json:"stun_urls,omitempty"`
-	RelayURLs      []string     `json:"relay_urls,omitempty"`
+	STUNURLs       []string          `json:"stun_urls,omitempty"`
+	RelayURLs      []string          `json:"relay_urls,omitempty"`
 }
 
 // AgentsListResponse is the body of GET /agents.
 type AgentsListResponse struct {
+	HubID  string         `json:"hub_id"`
 	Agents []AgentSummary `json:"agents"`
 }
 
@@ -70,6 +73,7 @@ type NetmapResponse struct {
 // HealthResponse is GET /health.
 type HealthResponse struct {
 	Status          string `json:"status"`
+	HubID           string `json:"hub_id"`
 	AgentsConnected int    `json:"agents_connected"`
 	NetmapRevision  uint64 `json:"netmap_revision"`
 }
@@ -83,6 +87,8 @@ type CreateTokenRequest struct {
 // TokenInfo is returned when minting or listing tokens (secret only on create).
 type TokenInfo struct {
 	ID        string    `json:"id"`
+	HubID     string    `json:"hub_id,omitempty"`
+	Role      string    `json:"role,omitempty"`
 	Label     string    `json:"label,omitempty"`
 	Token     string    `json:"token,omitempty"` // only on create
 	AgentID   string    `json:"agent_id,omitempty"`
@@ -95,4 +101,25 @@ type RotateTokenResponse struct {
 	ID      string `json:"id"`
 	Token   string `json:"token"`
 	AgentID string `json:"agent_id,omitempty"`
+}
+
+// CreateGrantRequest is POST /hub/grants (management token only).
+type CreateGrantRequest struct {
+	AgentAID string `json:"agent_a_id"`
+	AgentBID string `json:"agent_b_id"`
+}
+
+// GrantInfo is returned for create/list grant operations.
+type GrantInfo struct {
+	ID        string    `json:"id"`
+	HubID     string    `json:"hub_id"`
+	AgentAID  string    `json:"agent_a_id"`
+	AgentBID  string    `json:"agent_b_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// GrantsListResponse is GET /hub/grants.
+type GrantsListResponse struct {
+	HubID  string      `json:"hub_id"`
+	Grants []GrantInfo `json:"grants"`
 }

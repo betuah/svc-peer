@@ -12,39 +12,66 @@ import (
 	"github.com/google/uuid"
 )
 
+// Token roles (fully token-based auth — no parallel hub_secret).
+const (
+	RoleManagement = "management"
+	RoleAgent      = "agent"
+)
+
 var (
 	ErrTokenNotFound = errors.New("token not found")
 	ErrTokenRevoked  = errors.New("token revoked")
 	ErrTokenInvalid  = errors.New("invalid token")
+	ErrWrongHub      = errors.New("token hub_id mismatch")
+	ErrWrongRole     = errors.New("token role not allowed")
 )
 
-// TokenRecord is a durable agent credential. AgentID is empty until first register.
+// TokenRecord is a durable credential scoped to a hub_id.
+// For agent tokens, AgentID is empty until first successful register.
 type TokenRecord struct {
 	ID        string
+	HubID     string
+	Role      string // management | agent
 	Label     string
 	Tags      []string
 	Hash      string // sha256 hex of raw token
-	AgentID   string // bound on first successful register
+	AgentID   string // bound on first successful register (agent role only)
 	Revoked   bool
 	CreatedAt time.Time
 }
 
-// TokenStore is an in-memory token store (MVP).
+// TokenStore is an in-memory token store (MVP) for one hub_id.
 type TokenStore struct {
-	mu      sync.RWMutex
-	byID    map[string]*TokenRecord
-	byHash  map[string]*TokenRecord
+	hubID  string
+	mu     sync.RWMutex
+	byID   map[string]*TokenRecord
+	byHash map[string]*TokenRecord
 }
 
-// NewTokenStore creates an empty store.
-func NewTokenStore() *TokenStore {
+// NewTokenStore creates an empty store scoped to hubID.
+func NewTokenStore(hubID string) *TokenStore {
 	return &TokenStore{
+		hubID:  hubID,
 		byID:   make(map[string]*TokenRecord),
 		byHash: make(map[string]*TokenRecord),
 	}
 }
 
-// Seed loads a pre-seeded token from config. Raw token is hashed; never stored plaintext.
+// HubID returns the store's hub scope.
+func (s *TokenStore) HubID() string { return s.hubID }
+
+// SeedManagement loads the bootstrap / management-token seed (first management token).
+func (s *TokenStore) SeedManagement(id, raw string) error {
+	if raw == "" {
+		return fmt.Errorf("management token seed: empty token")
+	}
+	if id == "" {
+		id = "mgmt-bootstrap"
+	}
+	return s.seed(id, raw, RoleManagement, "management", nil)
+}
+
+// Seed loads a pre-seeded agent token from config. Raw token is hashed; never stored plaintext.
 func (s *TokenStore) Seed(id, raw, label string, tags []string) error {
 	if raw == "" {
 		return fmt.Errorf("pre-seed token %q: empty token", id)
@@ -52,6 +79,10 @@ func (s *TokenStore) Seed(id, raw, label string, tags []string) error {
 	if id == "" {
 		id = uuid.NewString()
 	}
+	return s.seed(id, raw, RoleAgent, label, tags)
+}
+
+func (s *TokenStore) seed(id, raw, role, label string, tags []string) error {
 	hash := hashToken(raw)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -63,6 +94,8 @@ func (s *TokenStore) Seed(id, raw, label string, tags []string) error {
 	}
 	rec := &TokenRecord{
 		ID:        id,
+		HubID:     s.hubID,
+		Role:      role,
 		Label:     label,
 		Tags:      append([]string(nil), tags...),
 		Hash:      hash,
@@ -73,8 +106,11 @@ func (s *TokenStore) Seed(id, raw, label string, tags []string) error {
 	return nil
 }
 
-// Mint creates a new long-lived agent token. Agent ID is not assigned here.
-func (s *TokenStore) Mint(label string, tags []string) (*TokenRecord, string, error) {
+// Mint creates a new long-lived agent token on this hub. Agent ID is not assigned here.
+func (s *TokenStore) Mint(hubID, label string, tags []string) (*TokenRecord, string, error) {
+	if hubID != s.hubID {
+		return nil, "", ErrWrongHub
+	}
 	raw, err := randomToken()
 	if err != nil {
 		return nil, "", err
@@ -82,6 +118,8 @@ func (s *TokenStore) Mint(label string, tags []string) (*TokenRecord, string, er
 	hash := hashToken(raw)
 	rec := &TokenRecord{
 		ID:        uuid.NewString(),
+		HubID:     s.hubID,
+		Role:      RoleAgent,
 		Label:     label,
 		Tags:      append([]string(nil), tags...),
 		Hash:      hash,
@@ -109,6 +147,9 @@ func (s *TokenStore) Lookup(raw string) (*TokenRecord, error) {
 	if rec.Revoked {
 		return nil, ErrTokenRevoked
 	}
+	if rec.HubID != s.hubID {
+		return nil, ErrWrongHub
+	}
 	cp := *rec
 	return &cp, nil
 }
@@ -123,6 +164,9 @@ func (s *TokenStore) BindAgentID(tokenID, agentID string) error {
 	}
 	if rec.Revoked {
 		return ErrTokenRevoked
+	}
+	if rec.Role != RoleAgent {
+		return ErrWrongRole
 	}
 	if rec.AgentID != "" && rec.AgentID != agentID {
 		return fmt.Errorf("token already bound to different agent")
@@ -169,6 +213,9 @@ func (s *TokenStore) Rotate(id string) (*TokenRecord, string, error) {
 	}
 	if rec.Revoked {
 		return nil, "", ErrTokenRevoked
+	}
+	if rec.Role != RoleAgent {
+		return nil, "", ErrWrongRole
 	}
 	delete(s.byHash, rec.Hash)
 	rec.Hash = newHash

@@ -26,6 +26,7 @@ type Envelope struct {
 
 	// Agent → hub
 	AgentID   string     `json:"agent_id,omitempty"`
+	HubID     string     `json:"hub_id,omitempty"`
 	Token     string     `json:"token,omitempty"`
 	Endpoints []Endpoint `json:"endpoints,omitempty"`
 	PeerID    string     `json:"peer_id,omitempty"`

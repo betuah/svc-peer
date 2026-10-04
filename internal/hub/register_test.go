@@ -10,8 +10,8 @@ import (
 )
 
 func TestTokenBindAgentIDOnFirstRegister(t *testing.T) {
-	tokens := NewTokenStore()
-	rec, raw, err := tokens.Mint("cam", []string{"warehouse"})
+	tokens := NewTokenStore("hub-main")
+	rec, raw, err := tokens.Mint("hub-main", "cam", []string{"warehouse"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestTokenBindAgentIDOnFirstRegister(t *testing.T) {
 		t.Fatalf("lookup id mismatch")
 	}
 
-	reg, err := NewRegistry("10.10.0.0/16", "peer.local", 45*time.Second)
+	reg, err := NewRegistry("hub-main", "10.10.0.0/16", "peer.local", 45*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,6 +45,9 @@ func TestTokenBindAgentIDOnFirstRegister(t *testing.T) {
 	}
 	if a1.ID == "" {
 		t.Fatal("expected agent id")
+	}
+	if a1.HubID != "hub-main" {
+		t.Fatalf("hub_id: got %q", a1.HubID)
 	}
 	if err := tokens.BindAgentID(looked.ID, a1.ID); err != nil {
 		t.Fatal(err)
@@ -78,12 +81,12 @@ func TestTokenBindAgentIDOnFirstRegister(t *testing.T) {
 }
 
 func TestHeartbeatOnlineOffline(t *testing.T) {
-	reg, err := NewRegistry("10.20.0.0/24", "peer.local", 30*time.Millisecond)
+	reg, err := NewRegistry("hub-main", "10.20.0.0/24", "peer.local", 30*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tokens := NewTokenStore()
-	rec, _, err := tokens.Mint("", nil)
+	tokens := NewTokenStore("hub-main")
+	rec, _, err := tokens.Mint("hub-main", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,8 +124,8 @@ func TestHeartbeatOnlineOffline(t *testing.T) {
 	}
 }
 
-func TestNetmapIncludesAgentPeersAndDNSMap(t *testing.T) {
-	reg, err := NewRegistry("10.10.0.0/16", "peer.local", time.Minute)
+func TestNetmapDefaultIsHubSpokeNotOpenMesh(t *testing.T) {
+	reg, err := NewRegistry("hub-main", "10.10.0.0/16", "peer.local", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,19 +135,23 @@ func TestNetmapIncludesAgentPeersAndDNSMap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a2, _, err := reg.RegisterFirstOrReconnect("t2", "", protocol.RegisterRequest{
+	_, _, err = reg.RegisterFirstOrReconnect("t2", "", protocol.RegisterRequest{
 		Name: "viewer-01", PublicKey: "pk2",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	nm := NewNetmapBuilder(reg).ForAgent(a1.ID)
-	if len(nm.Peers) != 1 {
-		t.Fatalf("expected 1 peer, got %d", len(nm.Peers))
+	hub := HubPeer{
+		PeerID:    PeerIDHub,
+		PublicKey: "hub-pk",
+		Endpoint:  "127.0.0.1:51820",
+		OverlayIP: reg.HubOverlayIP().String(),
+		DNSName:   "hub.peer.local",
 	}
-	if nm.Peers[0].AgentID != a2.ID {
-		t.Fatalf("peer agent mismatch")
+	nm := NewNetmapBuilder(reg, NewGrantStore(), hub).ForAgent(a1.ID)
+	if len(nm.Peers) != 1 || nm.Peers[0].PeerID != PeerIDHub {
+		t.Fatalf("expected hub-only peers, got %+v", nm.Peers)
 	}
 	if nm.DNSMap["cam-01.peer.local"] == "" || nm.DNSMap["viewer-01.peer.local"] == "" {
 		t.Fatalf("dns map incomplete: %#v", nm.DNSMap)

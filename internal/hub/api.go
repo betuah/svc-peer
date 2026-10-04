@@ -13,12 +13,13 @@ import (
 
 // API holds HTTP handlers for the hub control plane.
 type API struct {
-	cfg     Config
-	tokens  *TokenStore
-	reg     *Registry
-	netmap  *NetmapBuilder
-	log     *slog.Logger
-	hub     *Hub // for WS push stubs
+	cfg    Config
+	tokens *TokenStore
+	reg    *Registry
+	grants *GrantStore
+	netmap *NetmapBuilder
+	log    *slog.Logger
+	hub    *Hub // for WS push
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -43,10 +44,15 @@ func bearerToken(r *http.Request) string {
 	return strings.TrimSpace(strings.TrimPrefix(h, prefix))
 }
 
-func (a *API) requireHubSecret(w http.ResponseWriter, r *http.Request) bool {
-	tok := bearerToken(r)
-	if tok == "" || tok != a.cfg.HubSecret {
-		writeErr(w, http.StatusUnauthorized, "hub_secret required")
+func (a *API) requireManagementToken(w http.ResponseWriter, r *http.Request) bool {
+	raw := bearerToken(r)
+	rec, err := a.tokens.Lookup(raw)
+	if err != nil || rec.Role != RoleManagement {
+		writeErr(w, http.StatusUnauthorized, "management token required")
+		return false
+	}
+	if rec.HubID != a.cfg.HubID {
+		writeErr(w, http.StatusForbidden, "token hub_id mismatch")
 		return false
 	}
 	return true
@@ -59,6 +65,14 @@ func (a *API) requireAgentToken(w http.ResponseWriter, r *http.Request) (*TokenR
 		writeErr(w, http.StatusUnauthorized, "invalid agent token")
 		return nil, false
 	}
+	if rec.Role != RoleAgent {
+		writeErr(w, http.StatusUnauthorized, "agent token required")
+		return nil, false
+	}
+	if rec.HubID != a.cfg.HubID {
+		writeErr(w, http.StatusForbidden, "token hub_id mismatch")
+		return nil, false
+	}
 	return rec, true
 }
 
@@ -66,14 +80,15 @@ func (a *API) requireAgentToken(w http.ResponseWriter, r *http.Request) (*TokenR
 func (a *API) Health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, protocol.HealthResponse{
 		Status:          "ok",
+		HubID:           a.cfg.HubID,
 		AgentsConnected: a.reg.OnlineCount(),
 		NetmapRevision:  a.reg.Revision(),
 	})
 }
 
-// CreateToken handles POST /hub/tokens.
+// CreateToken handles POST /hub/tokens (management token only).
 func (a *API) CreateToken(w http.ResponseWriter, r *http.Request) {
-	if !a.requireHubSecret(w, r) {
+	if !a.requireManagementToken(w, r) {
 		return
 	}
 	var req protocol.CreateTokenRequest
@@ -83,13 +98,15 @@ func (a *API) CreateToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	rec, raw, err := a.tokens.Mint(req.Label, req.Tags)
+	rec, raw, err := a.tokens.Mint(a.cfg.HubID, req.Label, req.Tags)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusCreated, protocol.TokenInfo{
 		ID:        rec.ID,
+		HubID:     rec.HubID,
+		Role:      rec.Role,
 		Label:     rec.Label,
 		Token:     raw,
 		AgentID:   rec.AgentID,
@@ -100,7 +117,7 @@ func (a *API) CreateToken(w http.ResponseWriter, r *http.Request) {
 
 // RevokeToken handles DELETE /hub/tokens/{id}.
 func (a *API) RevokeToken(w http.ResponseWriter, r *http.Request) {
-	if !a.requireHubSecret(w, r) {
+	if !a.requireManagementToken(w, r) {
 		return
 	}
 	id := chi.URLParam(r, "id")
@@ -117,7 +134,7 @@ func (a *API) RevokeToken(w http.ResponseWriter, r *http.Request) {
 
 // RotateToken handles POST /hub/tokens/{id}/rotate.
 func (a *API) RotateToken(w http.ResponseWriter, r *http.Request) {
-	if !a.requireHubSecret(w, r) {
+	if !a.requireManagementToken(w, r) {
 		return
 	}
 	id := chi.URLParam(r, "id")
@@ -131,6 +148,10 @@ func (a *API) RotateToken(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusConflict, "token revoked")
 			return
 		}
+		if errors.Is(err, ErrWrongRole) {
+			writeErr(w, http.StatusBadRequest, "only agent tokens can be rotated")
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -138,6 +159,94 @@ func (a *API) RotateToken(w http.ResponseWriter, r *http.Request) {
 		ID:      rec.ID,
 		Token:   raw,
 		AgentID: rec.AgentID,
+	})
+}
+
+// CreateGrant handles POST /hub/grants (management token only).
+func (a *API) CreateGrant(w http.ResponseWriter, r *http.Request) {
+	if !a.requireManagementToken(w, r) {
+		return
+	}
+	var req protocol.CreateGrantRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if _, err := a.reg.Get(req.AgentAID); err != nil {
+		writeErr(w, http.StatusBadRequest, "agent_a_id not found on this hub")
+		return
+	}
+	if _, err := a.reg.Get(req.AgentBID); err != nil {
+		writeErr(w, http.StatusBadRequest, "agent_b_id not found on this hub")
+		return
+	}
+	g, err := a.grants.Grant(req.AgentAID, req.AgentBID)
+	if err != nil {
+		if errors.Is(err, ErrGrantExists) {
+			writeErr(w, http.StatusConflict, "grant already exists")
+			return
+		}
+		if errors.Is(err, ErrGrantInvalid) {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	a.reg.BumpRevision()
+	if a.hub != nil {
+		a.hub.PushNetmapTo(req.AgentAID, req.AgentBID)
+	}
+	writeJSON(w, http.StatusCreated, protocol.GrantInfo{
+		ID:        g.ID,
+		HubID:     a.cfg.HubID,
+		AgentAID:  g.AgentA,
+		AgentBID:  g.AgentB,
+		CreatedAt: g.CreatedAt,
+	})
+}
+
+// RevokeGrant handles DELETE /hub/grants/{id}.
+func (a *API) RevokeGrant(w http.ResponseWriter, r *http.Request) {
+	if !a.requireManagementToken(w, r) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+	g, err := a.grants.Get(id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "grant not found")
+		return
+	}
+	if err := a.grants.Revoke(id); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	a.reg.BumpRevision()
+	if a.hub != nil {
+		a.hub.PushNetmapTo(g.AgentA, g.AgentB)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked", "id": id})
+}
+
+// ListGrants handles GET /hub/grants.
+func (a *API) ListGrants(w http.ResponseWriter, r *http.Request) {
+	if !a.requireManagementToken(w, r) {
+		return
+	}
+	raw := a.grants.List()
+	out := make([]protocol.GrantInfo, 0, len(raw))
+	for _, g := range raw {
+		out = append(out, protocol.GrantInfo{
+			ID:        g.ID,
+			HubID:     a.cfg.HubID,
+			AgentAID:  g.AgentA,
+			AgentBID:  g.AgentB,
+			CreatedAt: g.CreatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, protocol.GrantsListResponse{
+		HubID:  a.cfg.HubID,
+		Grants: out,
 	})
 }
 
@@ -171,14 +280,15 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, "failed to bind agent id")
 			return
 		}
-		a.log.Info("agent registered", "agent_id", agent.ID, "name", agent.Name, "first", true)
+		a.log.Info("agent registered", "hub_id", a.cfg.HubID, "agent_id", agent.ID, "name", agent.Name, "first", true)
 	} else {
-		a.log.Info("agent reconnected", "agent_id", agent.ID, "name", agent.Name)
+		a.log.Info("agent reconnected", "hub_id", a.cfg.HubID, "agent_id", agent.ID, "name", agent.Name)
 	}
 
 	nm := a.netmap.ForAgent(agent.ID)
 	writeJSON(w, http.StatusOK, protocol.RegisterResponse{
 		AgentID:        agent.ID,
+		HubID:          a.cfg.HubID,
 		OverlayIP:      agent.OverlayIP.String(),
 		DNSName:        agent.DNSName,
 		NetmapRevision: nm.Revision,
@@ -187,20 +297,16 @@ func (a *API) Register(w http.ResponseWriter, r *http.Request) {
 		STUNURLs:       a.cfg.STUNURLs,
 		RelayURLs:      a.cfg.RelayURLs,
 	})
-
-	// Stub: push netmap to peers when membership changes.
-	if a.hub != nil {
-		a.hub.BroadcastNetmapExcept(agent.ID)
-	}
 }
 
-// ListAgents handles GET /agents.
+// ListAgents handles GET /agents (hub-scoped discovery with online status).
 func (a *API) ListAgents(w http.ResponseWriter, r *http.Request) {
 	if _, ok := a.requireAgentToken(w, r); !ok {
 		return
 	}
 	onlineOnly := r.URL.Query().Get("online") == "true"
 	writeJSON(w, http.StatusOK, protocol.AgentsListResponse{
+		HubID:  a.cfg.HubID,
 		Agents: a.reg.List(onlineOnly),
 	})
 }

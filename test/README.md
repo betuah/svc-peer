@@ -10,8 +10,11 @@
 ### Unit tests (package-aligned)
 
 ```
-internal/hub/register_test.go      # token bind, reconnect, heartbeat, netmap
-internal/hub/punch_test.go         # punch coordination + relay ticket claims
+internal/hub/register_test.go      # token bind, reconnect, heartbeat, hub-spoke netmap
+internal/hub/acl_test.go           # A2A grant store default-deny / reciprocal
+internal/hub/netmap_acl_test.go    # default hub-only peers, grant peers, hub peers
+internal/hub/auth_roles_test.go    # management-only mint/grant, hub isolation
+internal/hub/punch_test.go         # punch for granted peers + relay ticket claims
 internal/ticket/ticket_test.go     # HMAC ticket issue/verify
 internal/relay/frame_test.go       # relay frame codec
 internal/agent/dns/magic_test.go   # MagicDNS resolver
@@ -25,7 +28,7 @@ Default `go test ./...` runs **only unit tests**. Integration sources use `//go:
 
 ```
 test/integration/doc.go
-test/integration/hub_api_test.go   # in-process hub: mint → register → reconnect
+test/integration/hub_api_test.go   # mint/register/reconnect, ACL grant, hub isolation
 ```
 
 These need no CAP_NET_ADMIN (control plane only). Full two-agent WG dataplane smoke remains a manual/sudo procedure (see root README).

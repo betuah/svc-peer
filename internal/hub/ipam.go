@@ -15,8 +15,13 @@ type IPAM struct {
 	used     map[netip.Addr]struct{}
 }
 
+// HubAddr returns the reserved hub overlay address (network + 1).
+func (i *IPAM) HubAddr() netip.Addr {
+	return i.network.Addr().Next()
+}
+
 // NewIPAM parses overlayCIDR and prepares sequential allocation.
-// The network address and broadcast (for IPv4) are skipped; first usable host is reserved for optional hub peer later.
+// The network address is skipped; first usable host (network+1) is reserved for the hub peer.
 func NewIPAM(overlayCIDR string) (*IPAM, error) {
 	prefix, err := netip.ParsePrefix(overlayCIDR)
 	if err != nil {
@@ -24,7 +29,7 @@ func NewIPAM(overlayCIDR string) (*IPAM, error) {
 	}
 	prefix = prefix.Masked()
 	network := prefix.Addr()
-	// Skip network addr + first host (reserved).
+	// Skip network addr + first host (reserved for hub).
 	start := network.Next()
 	if !start.IsValid() {
 		return nil, fmt.Errorf("overlay_cidr too small")

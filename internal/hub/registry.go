@@ -18,6 +18,7 @@ var (
 // Agent is a registered peer identity in the hub registry.
 type Agent struct {
 	ID           string
+	HubID        string
 	Name         string
 	PublicKey    string
 	OverlayIP    netip.Prefix // /32 assignment
@@ -32,19 +33,23 @@ type Agent struct {
 	TokenID      string
 }
 
-// Registry tracks agents, presence, and IPAM from the configured overlay CIDR.
+// Registry tracks agents, presence, and IPAM from the configured overlay CIDR for one hub_id.
 type Registry struct {
-	mu         sync.RWMutex
-	agents     map[string]*Agent
-	byPubKey   map[string]string // pubkey → agent ID
-	ipam       *IPAM
-	dnsSuffix  string
-	revision   uint64
-	hbTimeout  time.Duration
+	mu        sync.RWMutex
+	hubID     string
+	agents    map[string]*Agent
+	byPubKey  map[string]string // pubkey → agent ID
+	ipam      *IPAM
+	dnsSuffix string
+	revision  uint64
+	hbTimeout time.Duration
 }
 
-// NewRegistry creates a registry with IPAM from overlayCIDR.
-func NewRegistry(overlayCIDR, dnsSuffix string, heartbeatTimeout time.Duration) (*Registry, error) {
+// NewRegistry creates a registry with IPAM from overlayCIDR, scoped to hubID.
+func NewRegistry(hubID, overlayCIDR, dnsSuffix string, heartbeatTimeout time.Duration) (*Registry, error) {
+	if hubID == "" {
+		return nil, errors.New("hub_id is required")
+	}
 	ipam, err := NewIPAM(overlayCIDR)
 	if err != nil {
 		return nil, err
@@ -53,12 +58,21 @@ func NewRegistry(overlayCIDR, dnsSuffix string, heartbeatTimeout time.Duration) 
 		dnsSuffix = "peer.local"
 	}
 	return &Registry{
+		hubID:     hubID,
 		agents:    make(map[string]*Agent),
 		byPubKey:  make(map[string]string),
 		ipam:      ipam,
 		dnsSuffix: dnsSuffix,
 		hbTimeout: heartbeatTimeout,
 	}, nil
+}
+
+// HubID returns the registry's hub scope.
+func (r *Registry) HubID() string { return r.hubID }
+
+// HubOverlayIP returns the reserved hub overlay /32.
+func (r *Registry) HubOverlayIP() netip.Prefix {
+	return netip.PrefixFrom(r.ipam.HubAddr(), 32)
 }
 
 // RegisterFirstOrReconnect creates Agent ID on first register, or restores the same agent.
@@ -123,6 +137,7 @@ func (r *Registry) RegisterFirstOrReconnect(tokenID, existingAgentID string, req
 
 	a := &Agent{
 		ID:           uuid.NewString(),
+		HubID:        r.hubID,
 		Name:         req.Name,
 		PublicKey:    req.PublicKey,
 		OverlayIP:    netip.PrefixFrom(ip, 32),
@@ -210,7 +225,7 @@ func (r *Registry) Get(id string) (*Agent, error) {
 	return &cp, nil
 }
 
-// List returns agents, optionally only online.
+// List returns agents on this hub, optionally only online.
 func (r *Registry) List(onlineOnly bool) []protocol.AgentSummary {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -231,6 +246,14 @@ func (r *Registry) List(onlineOnly bool) []protocol.AgentSummary {
 		})
 	}
 	return out
+}
+
+// BumpRevision increments the netmap revision (e.g. after grant changes).
+func (r *Registry) BumpRevision() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.revision++
+	return r.revision
 }
 
 // Revision returns the current netmap revision.
