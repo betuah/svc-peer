@@ -1,0 +1,75 @@
+package hub
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+)
+
+// Router builds the chi router for the hub.
+func (h *Hub) Router() http.Handler {
+	r := chi.NewRouter()
+	r.Use(middleware.RequestID)
+	r.Use(middleware.RealIP)
+	r.Use(middleware.Recoverer)
+
+	api := h.api
+	r.Get("/health", api.Health)
+
+	// REST routes get a request timeout; WS must not (long-lived control channel).
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.Timeout(60 * time.Second))
+		r.Route("/api/v1", func(r chi.Router) {
+			r.Post("/agents/register", api.Register)
+			r.Get("/agents", api.ListAgents)
+			r.Get("/agents/{id}", api.GetAgent)
+			r.Get("/netmap", api.GetNetmap)
+		})
+		// Hub token management (hub_secret). Public shape: /hub/tokens
+		r.Post("/hub/tokens", api.CreateToken)
+		r.Delete("/hub/tokens/{id}", api.RevokeToken)
+		r.Post("/hub/tokens/{id}/rotate", api.RotateToken)
+	})
+
+	r.Get("/ws/v1/agent", h.HandleAgentWS)
+	return r
+}
+
+// ListenAndServe starts the HTTP server until ctx is cancelled.
+func (h *Hub) ListenAndServe(ctx context.Context) error {
+	srv := &http.Server{
+		Addr:              h.cfg.ListenAddr,
+		Handler:           h.Router(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	stop := make(chan struct{})
+	go h.StartPresenceSweeper(stop)
+
+	errCh := make(chan error, 1)
+	go func() {
+		h.log.Info("hub listening", "addr", h.cfg.ListenAddr, "overlay_cidr", h.cfg.OverlayCIDR)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errCh <- err
+		}
+		close(errCh)
+	}()
+
+	select {
+	case <-ctx.Done():
+		close(stop)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+		return nil
+	case err := <-errCh:
+		close(stop)
+		if err != nil {
+			return fmt.Errorf("hub serve: %w", err)
+		}
+		return nil
+	}
+}

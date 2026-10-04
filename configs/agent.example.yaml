@@ -1,0 +1,12 @@
+# svc-peer agent example (camera)
+hub_url: "http://127.0.0.1:8080"
+token: "spt_dev_cam_warehouse_01_replace_me"
+name: "cam-warehouse-01"
+tags: ["warehouse", "camera"]
+capabilities: ["video/rtsp", "video/srt"]
+wg_backend: "auto" # auto = kernel WireGuard when available, else wireguard-go; or force kernel|userspace
+wg_interface: "sp0"
+wg_listen_port: 51820
+heartbeat_sec: 15
+direct_wait_sec: 8
+# private_key_path: "./cam.key"
