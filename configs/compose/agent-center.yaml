@@ -1,4 +1,6 @@
+# When hub TLS is enabled, use https://hub:8080 (WSS for control).
 hub_url: "http://hub:8080"
+# hub_tls_insecure_skip_verify: false
 hub_id: "hub-main"
 role: "center"
 center_bootstrap: "change-me-center-bootstrap"

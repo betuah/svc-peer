@@ -9,6 +9,9 @@ services:
     volumes:
       - ./configs/compose/hub.yaml:/etc/svc-peer/config.yaml:ro
       - hub-state:/var/lib/svc-peer
+      # Production TLS: mount PEM cert/key and set tls_cert_file / tls_key_file
+      # in configs/compose/hub.yaml, then point agents at https://hub:8080.
+      # - ./certs:/etc/svc-peer/tls:ro
     restart: unless-stopped
 
   relay:

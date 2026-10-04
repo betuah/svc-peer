@@ -2,10 +2,12 @@
 
 This document describes the APIs implemented in the repository today.
 
-- **Hub** (`cmd/hub`): control-plane HTTP + agent WebSocket. Auth uses `Authorization: Bearer <credential>`.
+- **Hub** (`cmd/hub`): control-plane HTTP(S) + agent WebSocket (WS/WSS). Auth uses `Authorization: Bearer <credential>`.
 - **Agent local API** (`cmd/agent`): loopback HTTP on the agent process. No bearer auth (bind to loopback by default).
 
 Error responses use JSON `{"error":"<message>"}` unless noted.
+
+When hub `tls_cert_file` and `tls_key_file` are set, the hub serves **HTTPS**; agents should use `hub_url` with `https://` (control channel is **WSS**). Plain HTTP remains available when both TLS paths are empty (local/dev). See the root [README.md](../README.md) for config knobs and Compose cert mounts.
 
 For binaries, Docker images, and Compose ports, see the root [README.md](../README.md).
 
@@ -246,7 +248,7 @@ Center-authored grants add direct WireGuard peers beyond the default edge↔cent
 
 ### `GET /ws/v1/agent`
 
-Agent control channel (gorilla WebSocket). First message is `hello` with `agent_id`, `hub_id`, and `token` (bootstrap or join token). Subsequent messages use the envelope types in `internal/protocol/messages.go`:
+Agent control channel (gorilla WebSocket). Over plain HTTP the URL is `ws://…/ws/v1/agent`; over hub TLS it is `wss://…/ws/v1/agent` (agents derive this from `hub_url` `http`/`https`). First message is `hello` with `agent_id`, `hub_id`, and `token` (bootstrap or join token). Subsequent messages use the envelope types in `internal/protocol/messages.go`:
 
 | Direction | `type` | Purpose |
 |-----------|--------|---------|

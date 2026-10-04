@@ -25,3 +25,9 @@ heartbeat_timeout_sec: 45
 # Online presence is not persisted. Center remains token source of truth and
 # re-syncs via PUT /hub/allowlist on connect. Empty disables persistence.
 state_path: "./data/hub-state.json"
+
+# TLS for hub REST + control WebSocket (HTTPS / WSS). Leave both empty for
+# plain HTTP (local/dev). Production and cloud/self-host deployments should set
+# both paths to a PEM certificate and private key.
+# tls_cert_file: "/etc/svc-peer/tls/cert.pem"
+# tls_key_file: "/etc/svc-peer/tls/key.pem"

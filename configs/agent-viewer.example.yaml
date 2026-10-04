@@ -1,5 +1,7 @@
 # svc-peer edge agent (viewer) — peers only the center (direct WG)
+# Use https:// when the hub has TLS enabled (control channel becomes WSS).
 hub_url: "http://127.0.0.1:8080"
+# hub_tls_insecure_skip_verify: false  # default; set true only for self-signed local/dev
 hub_id: "hub-main"
 role: "edge"
 token: "spt_dev_viewer_01_replace_me"
