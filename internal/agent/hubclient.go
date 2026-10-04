@@ -94,6 +94,22 @@ func (c *HubClient) SyncAllowlist(ctx context.Context, tokens []protocol.Allowli
 	return &out, nil
 }
 
+// ListAgents calls GET /api/v1/agents (hub registry view: joined agents + online).
+func (c *HubClient) ListAgents(ctx context.Context) (*protocol.AgentsListResponse, error) {
+	var out protocol.AgentsListResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/agents", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Connected reports whether the control WebSocket is currently open.
+func (c *HubClient) Connected() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.conn != nil
+}
+
 // Send writes a control message on the active WebSocket.
 func (c *HubClient) Send(env protocol.Envelope) error {
 	c.mu.Lock()

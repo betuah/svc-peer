@@ -33,4 +33,7 @@ func (d *KernelDevice) UpdatePeerEndpoint(string, string) error {
 func (d *KernelDevice) PeerLastHandshake(string) (time.Time, bool, error) {
 	return time.Time{}, false, fmt.Errorf("kernel WireGuard not available on this platform")
 }
+func (d *KernelDevice) PeerStats(string) (PeerStats, bool, error) {
+	return PeerStats{}, false, fmt.Errorf("kernel WireGuard not available on this platform")
+}
 func (d *KernelDevice) Close() error { return nil }

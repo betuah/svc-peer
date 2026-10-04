@@ -147,26 +147,44 @@ func (d *KernelDevice) UpdatePeerEndpoint(publicKey, endpoint string) error {
 }
 
 func (d *KernelDevice) PeerLastHandshake(publicKey string) (time.Time, bool, error) {
+	st, ok, err := d.PeerStats(publicKey)
+	if err != nil || !ok {
+		return time.Time{}, false, err
+	}
+	if st.LastHandshake.IsZero() {
+		return time.Time{}, false, nil
+	}
+	return st.LastHandshake, true, nil
+}
+
+func (d *KernelDevice) PeerStats(publicKey string) (PeerStats, bool, error) {
 	if !d.up {
-		return time.Time{}, false, fmt.Errorf("kernel device not up")
+		return PeerStats{}, false, fmt.Errorf("kernel device not up")
 	}
 	pk, err := wgtypes.ParseKey(publicKey)
 	if err != nil {
-		return time.Time{}, false, err
+		return PeerStats{}, false, err
 	}
 	dev, err := d.client.Device(d.name)
 	if err != nil {
-		return time.Time{}, false, err
+		return PeerStats{}, false, err
 	}
 	for _, p := range dev.Peers {
-		if p.PublicKey == pk {
-			if p.LastHandshakeTime.IsZero() {
-				return time.Time{}, false, nil
-			}
-			return p.LastHandshakeTime, true, nil
+		if p.PublicKey != pk {
+			continue
 		}
+		st := PeerStats{
+			PublicKey:     publicKey,
+			LastHandshake: p.LastHandshakeTime,
+			ReceiveBytes:  uint64(p.ReceiveBytes),
+			TransmitBytes: uint64(p.TransmitBytes),
+		}
+		if p.Endpoint != nil {
+			st.Endpoint = p.Endpoint.String()
+		}
+		return st, true, nil
 	}
-	return time.Time{}, false, nil
+	return PeerStats{}, false, nil
 }
 
 func (d *KernelDevice) Close() error {

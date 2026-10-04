@@ -13,4 +13,5 @@ wg_interface: "sp0"
 wg_listen_port: 51820
 heartbeat_sec: 15
 direct_wait_sec: 8
+local_api_listen: "127.0.0.1:9100"
 # private_key_path: "./cam.key"

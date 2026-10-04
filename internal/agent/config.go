@@ -40,20 +40,24 @@ type Config struct {
 	Capabilities   []string `yaml:"capabilities"`
 	PrivateKeyPath string   `yaml:"private_key_path"`
 	DirectWaitSec  int      `yaml:"direct_wait_sec"`
+	// LocalAPIListen is the bind address for the agent-local HTTP API (loopback by default).
+	// Empty disables the local API.
+	LocalAPIListen string `yaml:"local_api_listen"`
 }
 
 // DefaultConfig returns agent defaults.
 func DefaultConfig() Config {
 	return Config{
-		HubURL:       "http://127.0.0.1:8080",
-		HubID:        "hub-main",
-		Role:         protocol.RoleEdge,
-		StateDir:     "./state",
-		WGBackend:    "auto",
-		WGInterface:  "sp0",
-		WGListenPort: 51820,
-		HeartbeatSec: 15,
-		DirectWaitSec: 8,
+		HubURL:         "http://127.0.0.1:8080",
+		HubID:          "hub-main",
+		Role:           protocol.RoleEdge,
+		StateDir:       "./state",
+		WGBackend:      "auto",
+		WGInterface:    "sp0",
+		WGListenPort:   51820,
+		HeartbeatSec:   15,
+		DirectWaitSec:  8,
+		LocalAPIListen: "127.0.0.1:9100",
 	}
 }
 

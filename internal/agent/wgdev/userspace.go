@@ -155,47 +155,76 @@ func (d *UserspaceDevice) UpdatePeerEndpoint(publicKey, endpoint string) error {
 }
 
 func (d *UserspaceDevice) PeerLastHandshake(publicKey string) (time.Time, bool, error) {
+	st, ok, err := d.PeerStats(publicKey)
+	if err != nil || !ok {
+		return time.Time{}, false, err
+	}
+	if st.LastHandshake.IsZero() {
+		return time.Time{}, false, nil
+	}
+	return st.LastHandshake, true, nil
+}
+
+func (d *UserspaceDevice) PeerStats(publicKey string) (PeerStats, bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if !d.up {
-		return time.Time{}, false, fmt.Errorf("userspace device not up")
+		return PeerStats{}, false, fmt.Errorf("userspace device not up")
 	}
 	pk, err := wgtypes.ParseKey(publicKey)
 	if err != nil {
-		return time.Time{}, false, err
+		return PeerStats{}, false, err
 	}
 	pkHex := hex.EncodeToString(pk[:])
 	out, err := d.dev.IpcGet()
 	if err != nil {
-		return time.Time{}, false, err
+		return PeerStats{}, false, err
 	}
-	// Parse IPC dump for matching public_key then last_handshake_time_sec
-	lines := strings.Split(out, "\n")
+	st, found := parseUserspacePeerStats(out, pkHex, publicKey)
+	if !found {
+		return PeerStats{}, false, nil
+	}
+	return st, true, nil
+}
+
+// parseUserspacePeerStats extracts stats for one peer from a wireguard-go IpcGet dump.
+func parseUserspacePeerStats(ipc, pkHex, publicKeyB64 string) (PeerStats, bool) {
+	lines := strings.Split(ipc, "\n")
 	inPeer := false
+	found := false
+	st := PeerStats{PublicKey: publicKeyB64}
 	for _, line := range lines {
 		if strings.HasPrefix(line, "public_key=") {
 			inPeer = strings.TrimPrefix(line, "public_key=") == pkHex
+			if inPeer {
+				found = true
+			}
 			continue
 		}
 		if !inPeer {
 			continue
 		}
-		if strings.HasPrefix(line, "last_handshake_time_sec=") {
-			secStr := strings.TrimPrefix(line, "last_handshake_time_sec=")
+		switch {
+		case strings.HasPrefix(line, "endpoint="):
+			st.Endpoint = strings.TrimPrefix(line, "endpoint=")
+		case strings.HasPrefix(line, "last_handshake_time_sec="):
 			var sec int64
-			if _, err := fmt.Sscanf(secStr, "%d", &sec); err != nil {
-				return time.Time{}, false, nil
+			if _, err := fmt.Sscanf(strings.TrimPrefix(line, "last_handshake_time_sec="), "%d", &sec); err == nil && sec > 0 {
+				st.LastHandshake = time.Unix(sec, 0)
 			}
-			if sec == 0 {
-				return time.Time{}, false, nil
+		case strings.HasPrefix(line, "rx_bytes="):
+			var n uint64
+			if _, err := fmt.Sscanf(strings.TrimPrefix(line, "rx_bytes="), "%d", &n); err == nil {
+				st.ReceiveBytes = n
 			}
-			return time.Unix(sec, 0), true, nil
-		}
-		if strings.HasPrefix(line, "public_key=") {
-			inPeer = false
+		case strings.HasPrefix(line, "tx_bytes="):
+			var n uint64
+			if _, err := fmt.Sscanf(strings.TrimPrefix(line, "tx_bytes="), "%d", &n); err == nil {
+				st.TransmitBytes = n
+			}
 		}
 	}
-	return time.Time{}, false, nil
+	return st, found
 }
 
 func (d *UserspaceDevice) Close() error {
