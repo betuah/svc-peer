@@ -30,8 +30,8 @@ The center agent (`role=center`) is the network authority for join tokens, allow
 ## Join flow
 
 1. Start hub (+ relay) with `hub_id` and shared `center_bootstrap`.
-2. Start the center agent with matching `center_bootstrap` and `role: center`. It generates a local `agent_id`, registers, claims the sole center slot, and syncs `edge_tokens` via `PUT /hub/allowlist`.
-3. Start edge agents with join tokens from the center (`role: edge`). Each persists its own `agent_id`. Netmap peers are center-only.
+2. Start the center agent with matching `center_bootstrap` and `role: center`. It generates a local `agent_id`, registers, claims the sole center slot, loads durable allowlist state under `state_dir`, and syncs active edge join tokens via `PUT /hub/allowlist`.
+3. Create or revoke edge join tokens on the center local API (`/local/allowlist`), or seed them with YAML `edge_tokens`. Start edge agents with those tokens (`role: edge`). Each edge persists its own `agent_id`. Netmap peers are center-only.
 4. Direct WireGuard edge↔center. Path selection order for an allowed peer:
    **private/underlay host → STUN reflexive / hole punch → relay fallback**.
    Agents advertise host-local addresses (including RFC1918 / CGNAT) plus STUN
@@ -111,7 +111,14 @@ Center agent local API (default bind `127.0.0.1:9100`):
 ```bash
 curl -s http://127.0.0.1:9100/local/health
 curl -s http://127.0.0.1:9100/local/peers
+curl -s http://127.0.0.1:9100/local/allowlist
+curl -s -X POST http://127.0.0.1:9100/local/allowlist \
+  -H 'Content-Type: application/json' \
+  -d '{"label":"cam-01","tags":["warehouse"]}'
+curl -s -X POST http://127.0.0.1:9100/local/allowlist/sync
 ```
+
+Center join-token state is stored at `{state_dir}/allowlist.json` (for example `./state/center/allowlist.json`). The hub allowlist remains a cache; center re-syncs on connect and after local create/revoke.
 
 ## Docker images
 
@@ -190,6 +197,7 @@ GitHub Actions workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) r
 cmd/hub|agent|relay
 internal/hub                 registry, allowlist, ACL netmap, HTTP + control WS
 internal/agent               hub client, identity, path manager, WG backends
+internal/agent/allowlist     center durable edge join-token store + hub sync
 internal/agent/localapi      loopback /local/* HTTP API
 internal/relay               UDP + WebSocket forwarders
 configs/                     example YAML

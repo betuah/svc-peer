@@ -110,6 +110,15 @@ func (c *HubClient) SyncAllowlist(ctx context.Context, tokens []protocol.Allowli
 	return &out, nil
 }
 
+// RevokeToken calls DELETE /hub/tokens/{id} (center or management).
+func (c *HubClient) RevokeToken(ctx context.Context, id string) error {
+	if id == "" {
+		return fmt.Errorf("token id required")
+	}
+	var out map[string]string
+	return c.doJSON(ctx, http.MethodDelete, "/hub/tokens/"+url.PathEscape(id), nil, &out)
+}
+
 // ListAgents calls GET /api/v1/agents (hub registry view: joined agents + online).
 func (c *HubClient) ListAgents(ctx context.Context) (*protocol.AgentsListResponse, error) {
 	var out protocol.AgentsListResponse

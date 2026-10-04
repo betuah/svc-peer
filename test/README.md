@@ -19,6 +19,7 @@ internal/hub/config_test.go        # TLS path validation
 internal/hub/tls_test.go           # ListenAndServeTLS health
 internal/hub/punch_test.go         # punch only for allowed pairs
 internal/agent/identity/           # local agent_id persist
+internal/agent/allowlist/          # center durable join-token store
 internal/agent/config_test.go
 internal/agent/hubclient_tls_test.go # HTTPS register + WSS
 internal/agent/localapi/           # loopback /local/* handlers
@@ -34,7 +35,8 @@ internal/agent/wgdev/*
 test/integration/hub_api_test.go     # local id persist, center+allowlist, edge↔center netmap
 test/integration/hub_persist_test.go # hub restart membership + center allowlist re-sync
 test/integration/hub_tls_test.go     # hub HTTPS + agent WSS register/control
-test/integration/local_api_test.go   # agent local HTTP peers/status with hub registry
+test/integration/local_api_test.go         # agent local HTTP peers/status with hub registry
+test/integration/center_allowlist_test.go  # center /local/allowlist create/list/revoke/sync
 ```
 
 ## Commands

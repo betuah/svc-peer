@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/betuah/svc-peer/internal/agent/localapi"
 	"github.com/betuah/svc-peer/internal/agent/wgdev"
 	"github.com/betuah/svc-peer/internal/protocol"
 )
@@ -76,4 +78,42 @@ func (v localView) PeerDeviceStats(publicKey string) (wgdev.PeerStats, bool, err
 		return wgdev.PeerStats{}, false, nil
 	}
 	return v.a.device.PeerStats(publicKey)
+}
+
+func (v localView) ListAllowlist() ([]localapi.AllowlistEntryView, error) {
+	if v.a.allowlist == nil {
+		return nil, fmt.Errorf("allowlist store unavailable (center role required)")
+	}
+	entries := v.a.allowlist.List()
+	out := make([]localapi.AllowlistEntryView, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, entryToView(e, false))
+	}
+	return out, nil
+}
+
+func (v localView) CreateAllowlistEntry(req localapi.CreateAllowlistRequest) (localapi.AllowlistEntryView, error) {
+	if v.a.allowlist == nil {
+		return localapi.AllowlistEntryView{}, fmt.Errorf("allowlist store unavailable (center role required)")
+	}
+	e, err := v.a.allowlist.Add(req.ID, req.Token, req.Label, req.Tags)
+	if err != nil {
+		return localapi.AllowlistEntryView{}, err
+	}
+	return entryToView(e, true), nil
+}
+
+func (v localView) RevokeAllowlistEntry(id string) (localapi.AllowlistEntryView, error) {
+	if v.a.allowlist == nil {
+		return localapi.AllowlistEntryView{}, fmt.Errorf("allowlist store unavailable (center role required)")
+	}
+	e, err := v.a.allowlist.Revoke(id)
+	if err != nil {
+		return localapi.AllowlistEntryView{}, err
+	}
+	return entryToView(e, false), nil
+}
+
+func (v localView) SyncAllowlist(ctx context.Context) (localapi.AllowlistSyncResult, error) {
+	return v.a.SyncAllowlistToHub(ctx)
 }

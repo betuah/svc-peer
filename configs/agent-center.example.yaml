@@ -18,7 +18,9 @@ direct_wait_sec: 8
 # Agent-local HTTP API (loopback). Empty disables.
 local_api_listen: "127.0.0.1:9100"
 
-# Edge join tokens created/configured on center; synced to hub allowlist on start.
+# Optional seed for edge join tokens. Merged into {state_dir}/allowlist.json on start
+# (missing ids inserted; active ids updated; revoked ids are not resurrected).
+# Day-to-day mint/revoke: center local API /local/allowlist (synced to hub).
 edge_tokens:
   - id: "seed-cam-01"
     token: "spt_dev_cam_warehouse_01_replace_me"
