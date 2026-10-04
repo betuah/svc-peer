@@ -1,10 +1,12 @@
 package relay
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"sync"
 
+	"github.com/betuah/svc-peer/internal/ticket"
 	"github.com/gorilla/websocket"
 )
 
@@ -12,30 +14,33 @@ var relayUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-// WSHub is a stub WebSocket/TLS relay path for firewall-hostile networks.
-// Real design: authenticate short-lived hub tickets, then forward opaque WG frames
-// between paired peers (same as UDP path).
+// WSHub forwards opaque WG frames over WebSocket with ticket auth.
 type WSHub struct {
-	log *slog.Logger
+	log    *slog.Logger
+	secret string
 
 	mu    sync.Mutex
 	peers map[string]*websocket.Conn
 }
 
-// NewWSHub creates a WS relay stub.
-func NewWSHub(log *slog.Logger) *WSHub {
+// NewWSHub creates a WS relay.
+func NewWSHub(secret string, log *slog.Logger) *WSHub {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &WSHub{
-		log:   log,
-		peers: make(map[string]*websocket.Conn),
+		log:    log,
+		secret: secret,
+		peers:  make(map[string]*websocket.Conn),
 	}
 }
 
-// HandleRelay upgrades a connection at /relay.
-// Scaffold protocol: first text message is peer_id; subsequent binary frames are
-// [16-byte dest peer id][payload]. Ticket auth is TODO.
+type wsHello struct {
+	Ticket string `json:"ticket"`
+	PeerID string `json:"peer_id"`
+}
+
+// HandleRelay upgrades /relay connections.
 func (h *WSHub) HandleRelay(w http.ResponseWriter, r *http.Request) {
 	c, err := relayUpgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -48,44 +53,54 @@ func (h *WSHub) HandleRelay(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	peerID := string(msg)
-	if peerID == "" {
+	var hello wsHello
+	if err := json.Unmarshal(msg, &hello); err != nil || hello.PeerID == "" || hello.Ticket == "" {
+		return
+	}
+	claims, err := ticket.Verify(h.secret, hello.Ticket, "", "")
+	if err != nil || !claims.Allows(hello.PeerID) {
+		h.log.Debug("relay ws hello rejected", "err", err)
 		return
 	}
 
 	h.mu.Lock()
-	if old, ok := h.peers[peerID]; ok {
+	if old, ok := h.peers[hello.PeerID]; ok {
 		_ = old.Close()
 	}
-	h.peers[peerID] = c
+	h.peers[hello.PeerID] = c
 	h.mu.Unlock()
 	defer func() {
 		h.mu.Lock()
-		if cur, ok := h.peers[peerID]; ok && cur == c {
-			delete(h.peers, peerID)
+		if cur, ok := h.peers[hello.PeerID]; ok && cur == c {
+			delete(h.peers, hello.PeerID)
 		}
 		h.mu.Unlock()
 	}()
 
-	h.log.Info("relay ws peer connected", "peer_id", peerID)
+	h.log.Info("relay ws peer connected", "peer_id", hello.PeerID)
 	for {
 		mt, data, err := c.ReadMessage()
 		if err != nil {
 			return
 		}
-		if mt != websocket.BinaryMessage || len(data) < PacketHeaderSize {
+		if mt != websocket.BinaryMessage {
 			continue
 		}
-		destID := string(data[:PacketHeaderSize])
-		payload := data[PacketHeaderSize:]
-
+		frame, err := DecodeFrame(data)
+		if err != nil || frame.Type != MsgData {
+			continue
+		}
+		claims, err := ticket.Verify(h.secret, frame.Ticket, "", "")
+		if err != nil || !claims.Allows(frame.PeerID) {
+			continue
+		}
 		h.mu.Lock()
-		dest := h.peers[destID]
+		dest := h.peers[frame.PeerID]
 		h.mu.Unlock()
 		if dest == nil {
 			continue
 		}
-		if err := dest.WriteMessage(websocket.BinaryMessage, payload); err != nil {
+		if err := dest.WriteMessage(websocket.BinaryMessage, data); err != nil {
 			h.log.Debug("relay ws forward failed", "err", err)
 		}
 	}

@@ -6,11 +6,18 @@ const (
 	TypeHeartbeat      = "heartbeat"
 	TypeEndpointReport = "endpoint_report"
 	TypePathStatus     = "path_status"
+	TypeRelayRequest   = "relay_request"
 	TypeNetmap         = "netmap"
 	TypePunch          = "punch"
 	TypeRelayTicket    = "relay_ticket"
 	TypeError          = "error"
 	TypeAck            = "ack"
+)
+
+// Path kinds reported by agents.
+const (
+	PathDirect = "direct"
+	PathRelay  = "relay"
 )
 
 // Envelope is a typed control WebSocket message.

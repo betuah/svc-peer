@@ -8,11 +8,12 @@ import (
 	"time"
 
 	"github.com/betuah/svc-peer/internal/protocol"
+	"github.com/betuah/svc-peer/internal/ticket"
 	"github.com/gorilla/websocket"
 )
 
 var wsUpgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true }, // MVP; tighten with TLS + origin checks later
+	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
 // Conn tracks a connected agent control channel.
@@ -38,7 +39,7 @@ type Hub struct {
 	api    *API
 
 	mu    sync.RWMutex
-	conns map[string]*Conn // agentID → conn
+	conns map[string]*Conn
 }
 
 // New creates a hub from config.
@@ -94,7 +95,6 @@ func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.Close()
 
-	// First message must be hello with token (prefer over query string).
 	_, data, err := c.ReadMessage()
 	if err != nil {
 		return
@@ -166,19 +166,83 @@ func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 				_ = conn.send(protocol.Envelope{Type: protocol.TypeError, Code: "endpoint_update", Message: err.Error()})
 				continue
 			}
-			// Stub: notify peers of endpoint changes via netmap push.
 			h.BroadcastNetmapExcept("")
+			h.coordinatePunch(agentID)
 			_ = conn.send(protocol.Envelope{Type: protocol.TypeAck, Message: "endpoints_ok"})
 		case protocol.TypePathStatus:
-			// Stub: accept path status for future metrics.
+			h.log.Info("path status", "agent_id", agentID, "peer_id", env.PeerID, "path", env.Path, "rtt_ms", env.RTTMs)
 			_ = conn.send(protocol.Envelope{Type: protocol.TypeAck, Message: "path_status_ok"})
+		case protocol.TypeRelayRequest:
+			h.issueRelayTicket(conn, agentID, env.PeerID)
 		default:
 			_ = conn.send(protocol.Envelope{Type: protocol.TypeError, Code: "unknown_type", Message: env.Type})
 		}
 	}
 }
 
-// BroadcastNetmapExcept pushes current netmap to all connected agents except skipID (empty = none).
+func (h *Hub) coordinatePunch(reporterID string) {
+	reporter, err := h.reg.Get(reporterID)
+	if err != nil || len(reporter.Endpoints) == 0 {
+		return
+	}
+	agents := h.reg.SnapshotAgents()
+	for _, other := range agents {
+		if other.ID == reporterID || !other.Online || len(other.Endpoints) == 0 {
+			continue
+		}
+		h.sendTo(reporterID, protocol.Envelope{
+			Type:       protocol.TypePunch,
+			PeerID:     other.ID,
+			Candidates: other.Endpoints,
+		})
+		h.sendTo(other.ID, protocol.Envelope{
+			Type:       protocol.TypePunch,
+			PeerID:     reporterID,
+			Candidates: reporter.Endpoints,
+		})
+	}
+}
+
+func (h *Hub) issueRelayTicket(conn *Conn, agentID, peerID string) {
+	if peerID == "" {
+		_ = conn.send(protocol.Envelope{Type: protocol.TypeError, Code: "bad_relay_request", Message: "peer_id required"})
+		return
+	}
+	if _, err := h.reg.Get(peerID); err != nil {
+		_ = conn.send(protocol.Envelope{Type: protocol.TypeError, Code: "unknown_peer", Message: peerID})
+		return
+	}
+	tok, exp, err := ticket.Issue(h.cfg.HubSecret, agentID, peerID, 10*time.Minute)
+	if err != nil {
+		_ = conn.send(protocol.Envelope{Type: protocol.TypeError, Code: "ticket_issue", Message: err.Error()})
+		return
+	}
+	msg := protocol.Envelope{
+		Type:      protocol.TypeRelayTicket,
+		PeerID:    peerID,
+		URLs:      h.cfg.RelayURLs,
+		Ticket:    tok,
+		ExpiresAt: exp.Format(time.RFC3339),
+	}
+	_ = conn.send(msg)
+	// Peer receives the same ticket with PeerID pointing at the requester.
+	toPeer := msg
+	toPeer.PeerID = agentID
+	h.sendTo(peerID, toPeer)
+	h.log.Info("relay ticket issued", "agent_id", agentID, "peer_id", peerID)
+}
+
+func (h *Hub) sendTo(agentID string, env protocol.Envelope) {
+	h.mu.RLock()
+	c := h.conns[agentID]
+	h.mu.RUnlock()
+	if c == nil {
+		return
+	}
+	_ = c.send(env)
+}
+
+// BroadcastNetmapExcept pushes current netmap to all connected agents except skipID.
 func (h *Hub) BroadcastNetmapExcept(skipID string) {
 	h.mu.RLock()
 	conns := make([]*Conn, 0, len(h.conns))

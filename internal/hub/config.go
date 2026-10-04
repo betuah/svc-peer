@@ -37,7 +37,7 @@ func DefaultConfig() Config {
 		OverlayCIDR:         "10.10.0.0/16",
 		DNSSuffix:           "peer.local",
 		STUNURLs:            []string{"stun:stun.l.google.com:19302"},
-		RelayURLs:           []string{"udp://127.0.0.1:3478", "ws://127.0.0.1:3478/relay"},
+		RelayURLs:           []string{"udp://127.0.0.1:3478", "ws://127.0.0.1:3479/relay"},
 		HeartbeatTimeoutSec: 45,
 	}
 }

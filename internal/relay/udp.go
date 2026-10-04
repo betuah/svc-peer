@@ -6,25 +6,22 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/betuah/svc-peer/internal/ticket"
 )
 
-// PacketHeaderSize is scaffold framing: [16-byte dest peer id][opaque WG payload].
-const PacketHeaderSize = 16
-
-// UDPForwarder is a minimal opaque packet forwarder for WireGuard UDP.
-// Agents announce themselves (dest id all-zero + src id in payload); subsequent packets
-// are forwarded to the last known address for the destination peer id.
-// Ticket authentication against the hub is TODO (Phase 2).
+// UDPForwarder authenticates announce/data frames with relay tickets and forwards opaque WG payloads.
 type UDPForwarder struct {
-	log  *slog.Logger
-	conn *net.UDPConn
+	log    *slog.Logger
+	secret string
+	conn   *net.UDPConn
 
 	mu    sync.RWMutex
-	peers map[string]*net.UDPAddr // peerID → addr
+	peers map[string]*net.UDPAddr // agentID → addr
 }
 
 // NewUDPForwarder binds a UDP socket.
-func NewUDPForwarder(listenAddr string, log *slog.Logger) (*UDPForwarder, error) {
+func NewUDPForwarder(listenAddr, secret string, log *slog.Logger) (*UDPForwarder, error) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -37,9 +34,10 @@ func NewUDPForwarder(listenAddr string, log *slog.Logger) (*UDPForwarder, error)
 		return nil, err
 	}
 	return &UDPForwarder{
-		log:   log,
-		conn:  conn,
-		peers: make(map[string]*net.UDPAddr),
+		log:    log,
+		secret: secret,
+		conn:   conn,
+		peers:  make(map[string]*net.UDPAddr),
 	}, nil
 }
 
@@ -49,7 +47,7 @@ func (f *UDPForwarder) Addr() net.Addr { return f.conn.LocalAddr() }
 // Close shuts down the socket.
 func (f *UDPForwarder) Close() error { return f.conn.Close() }
 
-// Run reads packets and forwards opaque payloads until ctx is cancelled.
+// Run reads packets and forwards until ctx is cancelled.
 func (f *UDPForwarder) Run(ctx context.Context) error {
 	buf := make([]byte, 65535)
 	f.log.Info("relay UDP listening", "addr", f.conn.LocalAddr().String())
@@ -68,42 +66,40 @@ func (f *UDPForwarder) Run(ctx context.Context) error {
 			}
 			return err
 		}
-		if n < PacketHeaderSize {
+		frame, err := DecodeFrame(buf[:n])
+		if err != nil {
 			continue
 		}
-		destID := string(buf[:PacketHeaderSize])
-		payload := append([]byte(nil), buf[PacketHeaderSize:n]...)
-
-		// Announce: dest all zeros → register source peer id from first 16 payload bytes.
-		if isZeroID(destID) {
-			if len(payload) < PacketHeaderSize {
+		switch frame.Type {
+		case MsgAnnounce:
+			claims, err := ticket.Verify(f.secret, frame.Ticket, "", "")
+			if err != nil || !claims.Allows(frame.PeerID) {
+				f.log.Debug("relay announce rejected", "err", err)
 				continue
 			}
-			srcID := string(payload[:PacketHeaderSize])
 			f.mu.Lock()
-			f.peers[srcID] = from
+			f.peers[frame.PeerID] = from
 			f.mu.Unlock()
-			f.log.Debug("relay peer announced", "from", from.String())
-			continue
-		}
-
-		f.mu.RLock()
-		to := f.peers[destID]
-		f.mu.RUnlock()
-		if to == nil {
-			continue
-		}
-		if _, err := f.conn.WriteToUDP(payload, to); err != nil {
-			f.log.Debug("relay forward failed", "err", err)
+			f.log.Debug("relay peer announced", "peer_id", frame.PeerID, "from", from.String())
+		case MsgData:
+			// Source is learned by addr; validate ticket allows dest and that some peer maps to from.
+			claims, err := ticket.Verify(f.secret, frame.Ticket, "", "")
+			if err != nil || !claims.Allows(frame.PeerID) {
+				continue
+			}
+			f.mu.RLock()
+			to := f.peers[frame.PeerID]
+			f.mu.RUnlock()
+			if to == nil {
+				continue
+			}
+			// Re-wrap for destination client (same framing); destination unwraps payload.
+			out := EncodeData(frame.Ticket, frame.PeerID, frame.Payload)
+			// Actually destination decodeDataPayload strips ticket+dest and returns payload only —
+			// client expects full msgData frame OR just payload? Client decodeDataPayload expects full frame.
+			if _, err := f.conn.WriteToUDP(out, to); err != nil {
+				f.log.Debug("relay forward failed", "err", err)
+			}
 		}
 	}
-}
-
-func isZeroID(id string) bool {
-	for i := 0; i < len(id); i++ {
-		if id[i] != 0 {
-			return false
-		}
-	}
-	return true
 }

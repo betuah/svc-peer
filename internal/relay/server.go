@@ -18,12 +18,12 @@ type Server struct {
 	ws  *WSHub
 }
 
-// New creates a relay server (UDP bind happens here; HTTP starts in Run).
+// New creates a relay server.
 func New(cfg Config, log *slog.Logger) (*Server, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	udp, err := NewUDPForwarder(cfg.UDPListenAddr, log)
+	udp, err := NewUDPForwarder(cfg.UDPListenAddr, cfg.RelaySecret, log)
 	if err != nil {
 		return nil, fmt.Errorf("udp listen: %w", err)
 	}
@@ -31,11 +31,11 @@ func New(cfg Config, log *slog.Logger) (*Server, error) {
 		cfg: cfg,
 		log: log,
 		udp: udp,
-		ws:  NewWSHub(log),
+		ws:  NewWSHub(cfg.RelaySecret, log),
 	}, nil
 }
 
-// Run serves UDP forwarder and WS stub until ctx cancel.
+// Run serves UDP forwarder and WS until ctx cancel.
 func (s *Server) Run(ctx context.Context) error {
 	defer s.udp.Close()
 
@@ -49,7 +49,7 @@ func (s *Server) Run(ctx context.Context) error {
 	httpAddr := s.cfg.HTTPListenAddr
 	if httpAddr == "" || httpAddr == s.cfg.UDPListenAddr {
 		httpAddr = ":3479"
-		s.log.Info("relay HTTP/WS using separate port (UDP owns configured addr)",
+		s.log.Info("relay HTTP/WS using separate port",
 			"http", httpAddr, "udp", s.cfg.UDPListenAddr)
 	}
 

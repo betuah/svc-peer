@@ -10,8 +10,6 @@ relay_urls:
   - "ws://127.0.0.1:3479/relay"
 heartbeat_timeout_sec: 45
 
-# Optional pre-seeded agent tokens (same store as POST /hub/tokens).
-# Place the raw token value into the agent config `token` field.
 pre_seed_tokens:
   - id: "seed-cam-01"
     token: "spt_dev_cam_warehouse_01_replace_me"

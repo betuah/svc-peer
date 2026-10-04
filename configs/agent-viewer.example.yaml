@@ -1,0 +1,12 @@
+# svc-peer second agent example (viewer) — use alongside agent.example.yaml
+hub_url: "http://127.0.0.1:8080"
+token: "spt_dev_viewer_01_replace_me"
+name: "viewer-01"
+tags: ["viewer"]
+capabilities: []
+wg_backend: "auto"
+wg_interface: "sp1"
+wg_listen_port: 51821
+heartbeat_sec: 15
+direct_wait_sec: 8
+# private_key_path: "./viewer.key"

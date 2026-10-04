@@ -1,10 +1,13 @@
-// Package wgdev abstracts WireGuard device backends (kernel preferred, userspace fallback).
 package wgdev
 
 import (
+	"encoding/hex"
 	"fmt"
+	"net"
+	"time"
 
 	"github.com/betuah/svc-peer/internal/protocol"
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
 // Backend names.
@@ -16,44 +19,88 @@ const (
 
 // InterfaceConfig configures the local WG interface / TUN.
 type InterfaceConfig struct {
-	Name       string   // e.g. "sp0"
-	PrivateKey string   // base64 WG private key (agent-local; never sent to hub)
-	Addresses  []string // overlay addrs, e.g. ["10.10.0.15/32"]
+	Name       string
+	PrivateKey string // base64 WG private key
+	Addresses  []string
 	ListenPort int
 	MTU        int
 }
 
 // Device is the agent WireGuard data-plane interface.
-// Implementations: KernelDevice (preferred), UserspaceDevice (wireguard-go fallback).
 type Device interface {
 	Backend() string
 	Up(cfg InterfaceConfig) error
-	// ConfigurePeers applies a full peer set for a netmap revision (ReplacePeers semantics).
 	ConfigurePeers(revision uint64, peers []protocol.PeerConfig) error
+	UpdatePeerEndpoint(publicKey, endpoint string) error
+	PeerLastHandshake(publicKey string) (time.Time, bool, error)
 	Close() error
 }
 
-// Open selects a backend. Prefer kernel; fall back to userspace when unavailable or forced.
-// Phase 1 scaffold: both backends are stubs that log intent; real wgctrl / wireguard-go wiring is TODO.
-func Open(preference string) (Device, error) {
-	switch preference {
-	case BackendKernel:
-		return NewKernelDevice(), nil
-	case BackendUserspace:
-		return NewUserspaceDevice(), nil
-	case BackendAuto, "":
-		if kernelAvailable() {
-			return NewKernelDevice(), nil
-		}
-		return NewUserspaceDevice(), nil
-	default:
-		return nil, fmt.Errorf("unknown wg backend %q", preference)
+// GenerateKeyPair creates a WireGuard Curve25519 keypair (base64).
+func GenerateKeyPair() (priv, pub string, err error) {
+	key, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		return "", "", err
 	}
+	return key.String(), key.PublicKey().String(), nil
 }
 
-// kernelAvailable is a stub probe. Real implementation will try wgctrl / netlink.
-func kernelAvailable() bool {
-	// TODO: probe via wgctrl.New() and list devices, or check WireGuard module.
-	// Scaffold assumes Linux may have kernel WG; Open(auto) still returns kernel stub first.
-	return true
+// ParseKey parses a base64 WireGuard key.
+func ParseKey(s string) (wgtypes.Key, error) {
+	return wgtypes.ParseKey(s)
+}
+
+// KeyToHex converts a base64 WG key to hex (wireguard-go IPC).
+func KeyToHex(base64Key string) (string, error) {
+	k, err := wgtypes.ParseKey(base64Key)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(k[:]), nil
+}
+
+func peersToWG(peers []protocol.PeerConfig) ([]wgtypes.PeerConfig, error) {
+	out := make([]wgtypes.PeerConfig, 0, len(peers))
+	for _, p := range peers {
+		if p.PublicKey == "" {
+			continue
+		}
+		pk, err := wgtypes.ParseKey(p.PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("peer %s public key: %w", p.AgentID, err)
+		}
+		pc := wgtypes.PeerConfig{
+			PublicKey:         pk,
+			ReplaceAllowedIPs: true,
+		}
+		for _, ip := range p.AllowedIPs {
+			_, cidr, err := net.ParseCIDR(ip)
+			if err != nil {
+				// allow bare IP → /32 or /128
+				addr := net.ParseIP(ip)
+				if addr == nil {
+					return nil, fmt.Errorf("peer %s allowed_ip %q: %w", p.AgentID, ip, err)
+				}
+				bits := 32
+				if addr.To4() == nil {
+					bits = 128
+				}
+				cidr = &net.IPNet{IP: addr, Mask: net.CIDRMask(bits, bits)}
+			}
+			pc.AllowedIPs = append(pc.AllowedIPs, *cidr)
+		}
+		if p.Endpoint != "" {
+			udp, err := net.ResolveUDPAddr("udp", p.Endpoint)
+			if err != nil {
+				return nil, fmt.Errorf("peer %s endpoint: %w", p.AgentID, err)
+			}
+			pc.Endpoint = udp
+		}
+		if p.PersistentKeepalive > 0 {
+			ka := time.Duration(p.PersistentKeepalive) * time.Second
+			pc.PersistentKeepaliveInterval = &ka
+		}
+		out = append(out, pc)
+	}
+	return out, nil
 }

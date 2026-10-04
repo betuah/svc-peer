@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/betuah/svc-peer/internal/protocol"
@@ -22,6 +23,9 @@ type HubClient struct {
 	token   string
 	http    *http.Client
 	log     *slog.Logger
+
+	mu   sync.Mutex
+	conn *websocket.Conn
 }
 
 // NewHubClient creates a control-plane client.
@@ -81,26 +85,25 @@ func (c *HubClient) Register(ctx context.Context, req protocol.RegisterRequest) 
 	return &out, nil
 }
 
-// GetNetmap calls GET /api/v1/netmap.
-func (c *HubClient) GetNetmap(ctx context.Context) (*protocol.NetmapResponse, error) {
-	var out protocol.NetmapResponse
-	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/netmap", nil, &out); err != nil {
-		return nil, err
+// Send writes a control message on the active WebSocket.
+func (c *HubClient) Send(env protocol.Envelope) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
+		return fmt.Errorf("control ws not connected")
 	}
-	return &out, nil
+	return c.conn.WriteJSON(env)
 }
 
-// ListAgents calls GET /api/v1/agents.
-func (c *HubClient) ListAgents(ctx context.Context) (*protocol.AgentsListResponse, error) {
-	var out protocol.AgentsListResponse
-	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/agents", nil, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
+// Handlers are callbacks for control-plane pushes.
+type Handlers struct {
+	OnNetmap      func(protocol.Envelope)
+	OnPunch       func(protocol.Envelope)
+	OnRelayTicket func(protocol.Envelope)
 }
 
-// RunControlWS connects to WSS/WS control channel, sends heartbeats, and invokes onNetmap.
-func (c *HubClient) RunControlWS(ctx context.Context, agentID string, heartbeat time.Duration, onNetmap func(protocol.Envelope)) error {
+// RunControlWS connects to the control channel, sends heartbeats, and dispatches messages.
+func (c *HubClient) RunControlWS(ctx context.Context, agentID string, heartbeat time.Duration, h Handlers) error {
 	u, err := url.Parse(c.baseURL)
 	if err != nil {
 		return err
@@ -119,6 +122,15 @@ func (c *HubClient) RunControlWS(ctx context.Context, agentID string, heartbeat 
 		return fmt.Errorf("control ws dial: %w", err)
 	}
 	defer conn.Close()
+
+	c.mu.Lock()
+	c.conn = conn
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.conn = nil
+		c.mu.Unlock()
+	}()
 
 	if err := conn.WriteJSON(protocol.Envelope{
 		Type:    protocol.TypeHello,
@@ -142,12 +154,17 @@ func (c *HubClient) RunControlWS(ctx context.Context, agentID string, heartbeat 
 			}
 			switch env.Type {
 			case protocol.TypeNetmap:
-				if onNetmap != nil {
-					onNetmap(env)
+				if h.OnNetmap != nil {
+					h.OnNetmap(env)
 				}
-			case protocol.TypePunch, protocol.TypeRelayTicket:
-				// TODO: hole punch / relay ticket handling
-				c.log.Info("control message (stub)", "type", env.Type)
+			case protocol.TypePunch:
+				if h.OnPunch != nil {
+					h.OnPunch(env)
+				}
+			case protocol.TypeRelayTicket:
+				if h.OnRelayTicket != nil {
+					h.OnRelayTicket(env)
+				}
 			case protocol.TypeError:
 				c.log.Error("hub error", "code", env.Code, "message", env.Message)
 			}
@@ -163,7 +180,7 @@ func (c *HubClient) RunControlWS(ctx context.Context, agentID string, heartbeat 
 		case err := <-errCh:
 			return err
 		case <-ticker.C:
-			if err := conn.WriteJSON(protocol.Envelope{Type: protocol.TypeHeartbeat}); err != nil {
+			if err := c.Send(protocol.Envelope{Type: protocol.TypeHeartbeat}); err != nil {
 				return err
 			}
 		}
