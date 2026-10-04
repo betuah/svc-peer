@@ -256,7 +256,7 @@ func (a *API) CreateGrant(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "agent_b_id not found on this hub")
 		return
 	}
-	g, err := a.grants.Grant(req.AgentAID, req.AgentBID)
+	g, created, err := a.grants.GrantWithID(req.ID, req.AgentAID, req.AgentBID)
 	if err != nil {
 		if errors.Is(err, ErrGrantExists) {
 			writeErr(w, http.StatusConflict, "grant already exists")
@@ -269,11 +269,17 @@ func (a *API) CreateGrant(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	a.reg.BumpRevision()
-	if a.hub != nil {
-		a.hub.PushNetmapTo(req.AgentAID, req.AgentBID)
+	if created {
+		a.reg.BumpRevision()
+		if a.hub != nil {
+			a.hub.PushNetmapTo(req.AgentAID, req.AgentBID)
+		}
 	}
-	writeJSON(w, http.StatusCreated, protocol.GrantInfo{
+	status := http.StatusCreated
+	if !created {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, protocol.GrantInfo{
 		ID:        g.ID,
 		HubID:     a.cfg.HubID,
 		AgentAID:  g.AgentA,

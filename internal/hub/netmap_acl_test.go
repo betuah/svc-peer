@@ -95,6 +95,35 @@ func TestNetmapEdgeEdgeDeniedWithoutGrant(t *testing.T) {
 	}
 }
 
+func TestNetmapIncludesGrantedA2APeers(t *testing.T) {
+	reg, err := NewRegistry("hub-main", "10.10.0.0/16", "peer.local", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _ = reg.RegisterPresented("c", "", protocol.RoleCenter, protocol.RegisterRequest{Name: "c", PublicKey: "pkc"})
+	e1, _, _ := reg.RegisterPresented("e1", "t1", protocol.RoleEdge, protocol.RegisterRequest{Name: "e1", PublicKey: "pk1"})
+	e2, _, _ := reg.RegisterPresented("e2", "t2", protocol.RoleEdge, protocol.RegisterRequest{Name: "e2", PublicKey: "pk2"})
+	gs := NewGrantStore()
+	if _, _, err := gs.GrantWithID("g-a2a", e1.ID, e2.ID); err != nil {
+		t.Fatal(err)
+	}
+	b := NewNetmapBuilder(reg, gs)
+	if !b.AllowedPeer(e1.ID, e2.ID) {
+		t.Fatal("granted edge↔edge must be allowed for punch/relay")
+	}
+	nm := b.ForAgent(e1.ID)
+	ids := map[string]bool{}
+	for _, p := range nm.Peers {
+		ids[p.PeerID] = true
+	}
+	if !ids["c"] || !ids[e2.ID] {
+		t.Fatalf("edge netmap must include center + granted peer, got %+v", nm.Peers)
+	}
+	if len(nm.Peers) != 2 {
+		t.Fatalf("expected 2 peers, got %d", len(nm.Peers))
+	}
+}
+
 func TestNetmapPrefersPrivateUnderlayEndpoint(t *testing.T) {
 	reg, err := NewRegistry("hub-main", "10.10.0.0/16", "peer.local", time.Minute)
 	if err != nil {
