@@ -1,8 +1,6 @@
 package hub
 
 import (
-	"strconv"
-
 	"github.com/betuah/svc-peer/internal/protocol"
 )
 
@@ -108,10 +106,9 @@ func (b *NetmapBuilder) AllowedPeer(agentA, agentB string) bool {
 }
 
 func peerFromAgent(a *Agent) protocol.PeerConfig {
-	endpoint := ""
-	if len(a.Endpoints) > 0 {
-		endpoint = formatEndpoint(a.Endpoints[0])
-	}
+	// Prefer underlay/private host endpoints over STUN reflexive so same-site
+	// peers use direct L3 paths instead of hairpinning via public/NAT addresses.
+	endpoint := protocol.PreferredEndpoint(a.Endpoints)
 	return protocol.PeerConfig{
 		PeerID:              a.ID,
 		AgentID:             a.ID,
@@ -122,11 +119,4 @@ func peerFromAgent(a *Agent) protocol.PeerConfig {
 		DNSName:             a.DNSName,
 		PersistentKeepalive: 25,
 	}
-}
-
-func formatEndpoint(ep protocol.Endpoint) string {
-	if ep.IP == "" || ep.Port == 0 {
-		return ""
-	}
-	return ep.IP + ":" + strconv.Itoa(ep.Port)
 }

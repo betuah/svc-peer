@@ -94,3 +94,38 @@ func TestNetmapEdgeEdgeDeniedWithoutGrant(t *testing.T) {
 		t.Fatal("edge↔center must be allowed")
 	}
 }
+
+func TestNetmapPrefersPrivateUnderlayEndpoint(t *testing.T) {
+	reg, err := NewRegistry("hub-main", "10.10.0.0/16", "peer.local", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	center, _, err := reg.RegisterPresented("center-id", "", protocol.RoleCenter, protocol.RegisterRequest{
+		Name: "center", PublicKey: "pk-c",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	edge, _, err := reg.RegisterPresented("edge-id", "t1", protocol.RoleEdge, protocol.RegisterRequest{
+		Name: "cam-01", PublicKey: "pk-e",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Report srflx first; underlay private host must still win for netmap peer endpoint.
+	if err := reg.UpdateEndpoints(center.ID, []protocol.Endpoint{
+		{IP: "203.0.113.9", Port: 51820, Proto: "udp", Src: protocol.EndpointSrcSrflx},
+		{IP: "10.0.0.5", Port: 51820, Proto: "udp", Src: protocol.EndpointSrcHost},
+		{IP: "198.51.100.1", Port: 51820, Proto: "udp", Src: protocol.EndpointSrcHost},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	nm := NewNetmapBuilder(reg, NewGrantStore()).ForAgent(edge.ID)
+	if len(nm.Peers) != 1 {
+		t.Fatalf("peers: %+v", nm.Peers)
+	}
+	if nm.Peers[0].Endpoint != "10.0.0.5:51820" {
+		t.Fatalf("expected private underlay endpoint, got %q", nm.Peers[0].Endpoint)
+	}
+}
