@@ -36,7 +36,7 @@ The center agent (`role=center`) is the network authority for join tokens, allow
 
 ## Build
 
-Requires Go 1.23+.
+Requires Go 1.23.1 (see `go.mod`).
 
 ```bash
 go build ./...
@@ -76,6 +76,56 @@ curl -s http://127.0.0.1:9100/local/health
 curl -s http://127.0.0.1:9100/local/peers
 ```
 
+## Docker images
+
+One image per binary. Multi-stage builds; hub/relay use distroless, agent uses Alpine.
+
+| Image tag | Dockerfile | Binary |
+|-----------|------------|--------|
+| `svc-peer-hub` | `Dockerfile.hub` | `hub` |
+| `svc-peer-agent` | `Dockerfile.agent` | `agent` |
+| `svc-peer-relay` | `Dockerfile.relay` | `relay` |
+
+```bash
+docker build -f Dockerfile.hub -t svc-peer-hub:local .
+docker build -f Dockerfile.agent -t svc-peer-agent:local .
+docker build -f Dockerfile.relay -t svc-peer-relay:local .
+```
+
+The agent container needs `CAP_NET_ADMIN` (and usually `CAP_NET_RAW`) plus `/dev/net/tun` for WireGuard. Kernel WG also requires the `wireguard` module on the host; compose examples set `wg_backend: userspace` so agents can run with a TUN device alone.
+
+Mount a config file at `/etc/svc-peer/config.yaml` (image default `-config` path), or pass `-config` explicitly.
+
+## Docker Compose
+
+`docker-compose.yml` defines `hub` and `relay` by default. Center/edge agents are under the `agents` profile (TUN + capabilities).
+
+Compose-oriented configs: `configs/compose/` (service DNS names `hub` / `relay`; local API bound on `0.0.0.0`).
+
+```bash
+# Control plane only
+docker compose up -d --build
+
+curl -s http://127.0.0.1:8080/health
+
+# Hub + relay + center + edge (requires /dev/net/tun on the host)
+docker compose --profile agents up -d --build
+
+curl -s http://127.0.0.1:9100/local/health
+curl -s http://127.0.0.1:9101/local/health
+curl -s -H "Authorization: Bearer spt_dev_cam_warehouse_01_replace_me" \
+  http://127.0.0.1:8080/api/v1/agents
+```
+
+| Service | Host ports |
+|---------|------------|
+| hub | `8080` |
+| relay | `3478/udp`, `3479` |
+| agent-center | `51820/udp`, local API `9100` |
+| agent-edge | `51821/udp`, local API `9101` |
+
+Replace the example secrets in `configs/compose/*.yaml` before any shared or production use.
+
 ## Configuration
 
 | File | Process |
@@ -85,6 +135,7 @@ curl -s http://127.0.0.1:9100/local/peers
 | `configs/agent.example.yaml` | Edge agent (join token, `local_api_listen`) |
 | `configs/agent-viewer.example.yaml` | Second edge example (different WG interface / local API port) |
 | `configs/relay.example.yaml` | Relay |
+| `configs/compose/*.yaml` | Compose service configs |
 
 Agent `local_api_listen` defaults to `127.0.0.1:9100`. Set empty to disable. Use distinct ports when multiple agents share a host (viewer example uses `127.0.0.1:9101`).
 
@@ -92,7 +143,9 @@ Agent `local_api_listen` defaults to `127.0.0.1:9100`. Set empty to disable. Use
 
 See [docs/api.md](docs/api.md) for hub control endpoints and agent local HTTP endpoints (methods, auth, fields).
 
-Architecture and locked product decisions: project store docs (`wireguard-architecture-plan.md`, `project-context.md`) when working in the svc-peer project context.
+## CI
+
+GitHub Actions workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pull requests and pushes to `main`: `go vet`, `go build ./...`, `go test ./...`, and `go test -tags=integration ./test/integration/...` (Go 1.23.1).
 
 ## Layout
 
@@ -103,7 +156,11 @@ internal/agent               hub client, identity, path manager, WG backends
 internal/agent/localapi      loopback /local/* HTTP API
 internal/relay               UDP + WebSocket forwarders
 configs/                     example YAML
+configs/compose/             Compose service configs
 docs/api.md                  HTTP API reference
+Dockerfile.hub|agent|relay   per-binary images
+docker-compose.yml           hub, relay, optional agents profile
+.github/workflows/ci.yml     vet, build, unit + integration tests
 test/integration/            integration tests (build tag integration)
 ```
 

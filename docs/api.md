@@ -7,6 +7,8 @@ This document describes the APIs implemented in the repository today.
 
 Error responses use JSON `{"error":"<message>"}` unless noted.
 
+For binaries, Docker images, and Compose ports, see the root [README.md](../README.md).
+
 ---
 
 ## Credentials (hub)
