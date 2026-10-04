@@ -2,6 +2,7 @@ package hub
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -29,12 +30,13 @@ func (c *Conn) send(v any) error {
 	return c.conn.WriteJSON(v)
 }
 
-// Hub is the control-plane process wiring REST + WS + registry.
+// Hub is the thin NAT-bridge / signaling process for one hub_id.
 type Hub struct {
 	cfg    Config
 	log    *slog.Logger
 	tokens *TokenStore
 	reg    *Registry
+	grants *GrantStore
 	netmap *NetmapBuilder
 	api    *API
 
@@ -47,29 +49,42 @@ func New(cfg Config, log *slog.Logger) (*Hub, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	reg, err := NewRegistry(cfg.OverlayCIDR, cfg.DNSSuffix, time.Duration(cfg.HeartbeatTimeoutSec)*time.Second)
+	if cfg.HubID == "" {
+		return nil, fmt.Errorf("hub_id is required")
+	}
+	if cfg.CenterBootstrap == "" {
+		return nil, fmt.Errorf("center_bootstrap is required")
+	}
+	if cfg.RelaySecret == "" {
+		return nil, fmt.Errorf("relay_secret is required")
+	}
+	reg, err := NewRegistry(cfg.HubID, cfg.OverlayCIDR, cfg.DNSSuffix, time.Duration(cfg.HeartbeatTimeoutSec)*time.Second)
 	if err != nil {
 		return nil, err
 	}
-	tokens := NewTokenStore()
-	for _, ps := range cfg.PreSeedTokens {
-		if err := tokens.Seed(ps.ID, ps.Token, ps.Label, ps.Tags); err != nil {
+	tokens := NewTokenStore(cfg.HubID)
+	if cfg.ManagementTokenSeed != "" {
+		if err := tokens.SeedManagement("mgmt-bootstrap", cfg.ManagementTokenSeed); err != nil {
 			return nil, err
 		}
-		log.Info("pre-seeded token", "id", ps.ID, "label", ps.Label)
+		log.Info("seeded management token (break-glass)", "hub_id", cfg.HubID)
 	}
+
+	grants := NewGrantStore()
 	h := &Hub{
 		cfg:    cfg,
 		log:    log,
 		tokens: tokens,
 		reg:    reg,
-		netmap: NewNetmapBuilder(reg),
+		grants: grants,
+		netmap: NewNetmapBuilder(reg, grants),
 		conns:  make(map[string]*Conn),
 	}
 	h.api = &API{
 		cfg:    cfg,
 		tokens: tokens,
 		reg:    reg,
+		grants: grants,
 		netmap: h.netmap,
 		log:    log,
 		hub:    h,
@@ -85,6 +100,12 @@ func (h *Hub) Tokens() *TokenStore { return h.tokens }
 
 // Registry exposes the agent registry (tests / wiring).
 func (h *Hub) Registry() *Registry { return h.reg }
+
+// Grants exposes the grant store (tests / wiring).
+func (h *Hub) Grants() *GrantStore { return h.grants }
+
+// Netmap exposes the netmap builder (tests / wiring).
+func (h *Hub) Netmap() *NetmapBuilder { return h.netmap }
 
 // HandleAgentWS upgrades to the agent control WebSocket.
 func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
@@ -104,21 +125,17 @@ func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 		_ = c.WriteJSON(protocol.Envelope{Type: protocol.TypeError, Code: "bad_hello", Message: "first message must be hello"})
 		return
 	}
-	rec, err := h.tokens.Lookup(hello.Token)
+
+	agentID, err := h.authenticateWS(hello)
 	if err != nil {
-		_ = c.WriteJSON(protocol.Envelope{Type: protocol.TypeError, Code: "unauthorized", Message: "invalid token"})
+		_ = c.WriteJSON(protocol.Envelope{Type: protocol.TypeError, Code: "unauthorized", Message: err.Error()})
 		return
 	}
-	if rec.AgentID == "" {
-		_ = c.WriteJSON(protocol.Envelope{Type: protocol.TypeError, Code: "not_registered", Message: "register before opening control ws"})
-		return
-	}
-	if hello.AgentID != "" && hello.AgentID != rec.AgentID {
-		_ = c.WriteJSON(protocol.Envelope{Type: protocol.TypeError, Code: "agent_mismatch", Message: "agent_id does not match token binding"})
+	if hello.HubID != "" && hello.HubID != h.cfg.HubID {
+		_ = c.WriteJSON(protocol.Envelope{Type: protocol.TypeError, Code: "hub_mismatch", Message: "hub_id mismatch"})
 		return
 	}
 
-	agentID := rec.AgentID
 	conn := &Conn{AgentID: agentID, conn: c}
 	h.mu.Lock()
 	if old, ok := h.conns[agentID]; ok {
@@ -133,19 +150,20 @@ func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 		}
 		h.mu.Unlock()
 		h.reg.SetOffline(agentID)
-		h.log.Info("agent ws disconnected", "agent_id", agentID)
+		h.log.Info("agent ws disconnected", "hub_id", h.cfg.HubID, "agent_id", agentID)
 	}()
 
 	_ = h.reg.Heartbeat(agentID)
 	nm := h.netmap.ForAgent(agentID)
 	_ = conn.send(protocol.Envelope{
 		Type:     protocol.TypeNetmap,
+		HubID:    h.cfg.HubID,
 		Revision: nm.Revision,
 		Peers:    nm.Peers,
 		DNSMap:   nm.DNSMap,
 	})
 	_ = conn.send(protocol.Envelope{Type: protocol.TypeAck, Message: "hello_ok"})
-	h.log.Info("agent ws connected", "agent_id", agentID)
+	h.log.Info("agent ws connected", "hub_id", h.cfg.HubID, "agent_id", agentID)
 
 	for {
 		_, data, err := c.ReadMessage()
@@ -166,7 +184,7 @@ func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 				_ = conn.send(protocol.Envelope{Type: protocol.TypeError, Code: "endpoint_update", Message: err.Error()})
 				continue
 			}
-			h.BroadcastNetmapExcept("")
+			h.pushAllowedPeers(agentID)
 			h.coordinatePunch(agentID)
 			_ = conn.send(protocol.Envelope{Type: protocol.TypeAck, Message: "endpoints_ok"})
 		case protocol.TypePathStatus:
@@ -180,14 +198,44 @@ func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Hub) authenticateWS(hello protocol.Envelope) (string, error) {
+	if hello.Token == "" {
+		return "", fmt.Errorf("token required")
+	}
+	if hello.Token == h.cfg.CenterBootstrap {
+		cid := h.reg.CenterAgentID()
+		if cid == "" {
+			return "", fmt.Errorf("register center before opening control ws")
+		}
+		if hello.AgentID != "" && hello.AgentID != cid {
+			return "", fmt.Errorf("agent_id does not match center")
+		}
+		return cid, nil
+	}
+	rec, err := h.tokens.Lookup(hello.Token)
+	if err != nil || rec.Role != RoleEdgeToken {
+		return "", fmt.Errorf("invalid edge join token")
+	}
+	if rec.AgentID == "" {
+		return "", fmt.Errorf("register before opening control ws")
+	}
+	if hello.AgentID != "" && hello.AgentID != rec.AgentID {
+		return "", fmt.Errorf("agent_id does not match token binding")
+	}
+	return rec.AgentID, nil
+}
+
+// coordinatePunch exchanges candidates only for allowed pairs (edge↔center or grants).
 func (h *Hub) coordinatePunch(reporterID string) {
 	reporter, err := h.reg.Get(reporterID)
 	if err != nil || len(reporter.Endpoints) == 0 {
 		return
 	}
-	agents := h.reg.SnapshotAgents()
-	for _, other := range agents {
+	for _, other := range h.reg.SnapshotAgents() {
 		if other.ID == reporterID || !other.Online || len(other.Endpoints) == 0 {
+			continue
+		}
+		if !h.netmap.AllowedPeer(reporterID, other.ID) {
 			continue
 		}
 		h.sendTo(reporterID, protocol.Envelope{
@@ -208,11 +256,15 @@ func (h *Hub) issueRelayTicket(conn *Conn, agentID, peerID string) {
 		_ = conn.send(protocol.Envelope{Type: protocol.TypeError, Code: "bad_relay_request", Message: "peer_id required"})
 		return
 	}
+	if !h.netmap.AllowedPeer(agentID, peerID) {
+		_ = conn.send(protocol.Envelope{Type: protocol.TypeError, Code: "forbidden", Message: "peer pair not allowed"})
+		return
+	}
 	if _, err := h.reg.Get(peerID); err != nil {
 		_ = conn.send(protocol.Envelope{Type: protocol.TypeError, Code: "unknown_peer", Message: peerID})
 		return
 	}
-	tok, exp, err := ticket.Issue(h.cfg.HubSecret, agentID, peerID, 10*time.Minute)
+	tok, exp, err := ticket.Issue(h.cfg.RelaySecret, agentID, peerID, 10*time.Minute)
 	if err != nil {
 		_ = conn.send(protocol.Envelope{Type: protocol.TypeError, Code: "ticket_issue", Message: err.Error()})
 		return
@@ -225,11 +277,10 @@ func (h *Hub) issueRelayTicket(conn *Conn, agentID, peerID string) {
 		ExpiresAt: exp.Format(time.RFC3339),
 	}
 	_ = conn.send(msg)
-	// Peer receives the same ticket with PeerID pointing at the requester.
 	toPeer := msg
 	toPeer.PeerID = agentID
 	h.sendTo(peerID, toPeer)
-	h.log.Info("relay ticket issued", "agent_id", agentID, "peer_id", peerID)
+	h.log.Info("relay ticket issued", "hub_id", h.cfg.HubID, "agent_id", agentID, "peer_id", peerID)
 }
 
 func (h *Hub) sendTo(agentID string, env protocol.Envelope) {
@@ -240,6 +291,42 @@ func (h *Hub) sendTo(agentID string, env protocol.Envelope) {
 		return
 	}
 	_ = c.send(env)
+}
+
+// PushNetmapTo pushes ACL-derived netmap to the listed agents.
+func (h *Hub) PushNetmapTo(agentIDs ...string) {
+	for _, id := range agentIDs {
+		if id == "" {
+			continue
+		}
+		h.mu.RLock()
+		c := h.conns[id]
+		h.mu.RUnlock()
+		if c == nil {
+			continue
+		}
+		nm := h.netmap.ForAgent(id)
+		_ = c.send(protocol.Envelope{
+			Type:     protocol.TypeNetmap,
+			HubID:    h.cfg.HubID,
+			Revision: nm.Revision,
+			Peers:    nm.Peers,
+			DNSMap:   nm.DNSMap,
+		})
+	}
+}
+
+func (h *Hub) pushAllowedPeers(agentID string) {
+	ids := []string{agentID}
+	for _, other := range h.reg.SnapshotAgents() {
+		if other.ID == agentID {
+			continue
+		}
+		if h.netmap.AllowedPeer(agentID, other.ID) {
+			ids = append(ids, other.ID)
+		}
+	}
+	h.PushNetmapTo(ids...)
 }
 
 // BroadcastNetmapExcept pushes current netmap to all connected agents except skipID.
@@ -258,6 +345,7 @@ func (h *Hub) BroadcastNetmapExcept(skipID string) {
 		nm := h.netmap.ForAgent(c.AgentID)
 		_ = c.send(protocol.Envelope{
 			Type:     protocol.TypeNetmap,
+			HubID:    h.cfg.HubID,
 			Revision: nm.Revision,
 			Peers:    nm.Peers,
 			DNSMap:   nm.DNSMap,
@@ -276,7 +364,7 @@ func (h *Hub) StartPresenceSweeper(stop <-chan struct{}) {
 		case <-ticker.C:
 			flipped := h.reg.SweepOffline()
 			for _, id := range flipped {
-				h.log.Info("agent marked offline (heartbeat timeout)", "agent_id", id)
+				h.log.Info("agent marked offline (heartbeat timeout)", "hub_id", h.cfg.HubID, "agent_id", id)
 			}
 		}
 	}

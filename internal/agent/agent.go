@@ -11,6 +11,7 @@ import (
 
 	"github.com/betuah/svc-peer/internal/agent/dns"
 	"github.com/betuah/svc-peer/internal/agent/endpoint"
+	"github.com/betuah/svc-peer/internal/agent/identity"
 	"github.com/betuah/svc-peer/internal/agent/pathmgr"
 	"github.com/betuah/svc-peer/internal/agent/relayclient"
 	"github.com/betuah/svc-peer/internal/agent/wgdev"
@@ -28,6 +29,8 @@ type Agent struct {
 	relay   *relayclient.Client
 	paths   *pathmgr.Manager
 	agentID string
+	hubID   string
+	role    string
 	pubKey  string
 	privKey string
 	stun    []string
@@ -47,12 +50,18 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	agentID, err := identity.LoadOrCreate(cfg.StateDir)
+	if err != nil {
+		return nil, err
+	}
 	return &Agent{
 		cfg:     cfg,
 		log:     log,
-		client:  NewHubClient(cfg.HubURL, cfg.Token, log),
+		client:  NewHubClient(cfg.HubURL, cfg.AuthCredential(), log),
 		device:  dev,
 		dns:     dns.NewResolver(),
+		agentID: agentID,
+		role:    cfg.Role,
 		privKey: priv,
 		pubKey:  pub,
 	}, nil
@@ -61,8 +70,10 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 // Run registers, brings up WG, reports endpoints, and maintains control + path selection.
 func (a *Agent) Run(ctx context.Context) error {
 	reg, err := a.client.Register(ctx, protocol.RegisterRequest{
+		AgentID:      a.agentID,
 		Name:         a.cfg.Name,
 		PublicKey:    a.pubKey,
+		Role:         a.cfg.Role,
 		Tags:         a.cfg.Tags,
 		Capabilities: a.cfg.Capabilities,
 		Platform:     runtime.GOOS + "/" + runtime.GOARCH,
@@ -71,7 +82,14 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("register: %w", err)
 	}
-	a.agentID = reg.AgentID
+	if reg.AgentID != a.agentID {
+		return fmt.Errorf("hub returned different agent_id: local=%s hub=%s", a.agentID, reg.AgentID)
+	}
+	a.hubID = reg.HubID
+	if a.hubID == "" {
+		a.hubID = a.cfg.HubID
+	}
+	a.role = reg.Role
 	a.stun = reg.STUNURLs
 	a.relays = reg.RelayURLs
 	a.dns.Update(reg.DNSMap)
@@ -83,11 +101,29 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	a.log.Info("registered",
 		"agent_id", reg.AgentID,
+		"hub_id", reg.HubID,
+		"role", reg.Role,
+		"center_agent_id", reg.CenterAgentID,
 		"overlay_ip", reg.OverlayIP,
 		"dns_name", reg.DNSName,
 		"peers", len(reg.Peers),
 		"wg_backend", a.device.Backend(),
 	)
+
+	// Center syncs edge join-token allowlist to thin hub (primary edge onboarding path).
+	if a.cfg.Role == protocol.RoleCenter && len(a.cfg.EdgeTokens) > 0 {
+		tokens := make([]protocol.AllowlistToken, 0, len(a.cfg.EdgeTokens))
+		for _, t := range a.cfg.EdgeTokens {
+			tokens = append(tokens, protocol.AllowlistToken{
+				ID: t.ID, Token: t.Token, Label: t.Label, Tags: t.Tags,
+			})
+		}
+		syncResp, err := a.client.SyncAllowlist(ctx, tokens)
+		if err != nil {
+			return fmt.Errorf("sync allowlist: %w", err)
+		}
+		a.log.Info("synced edge allowlist to hub", "count", syncResp.Upsert, "ids", syncResp.IDs)
+	}
 
 	if err := a.device.Up(wgdev.InterfaceConfig{
 		Name:       a.cfg.WGInterface,
@@ -108,7 +144,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	hb := time.Duration(a.cfg.HeartbeatSec) * time.Second
 	wsErr := make(chan error, 1)
 	go func() {
-		wsErr <- a.client.RunControlWS(ctx, a.agentID, hb, Handlers{
+		wsErr <- a.client.RunControlWS(ctx, a.agentID, a.hubID, hb, Handlers{
 			OnNetmap: func(env protocol.Envelope) {
 				a.dns.Update(env.DNSMap)
 				if err := a.paths.ApplyNetmap(ctx, env.Revision, env.Peers); err != nil {
@@ -132,7 +168,6 @@ func (a *Agent) Run(ctx context.Context) error {
 		})
 	}()
 
-	// Wait briefly for WS hello, then report endpoints (and refresh periodically).
 	endpointTicker := time.NewTicker(60 * time.Second)
 	defer endpointTicker.Stop()
 	report := func() {
@@ -181,6 +216,9 @@ func (a *Agent) ReportEndpoints(ctx context.Context) error {
 
 // Resolver exposes MagicDNS for tests / local tooling.
 func (a *Agent) Resolver() *dns.Resolver { return a.dns }
+
+// AgentID returns the locally persisted agent id.
+func (a *Agent) AgentID() string { return a.agentID }
 
 func loadOrGenerateKeys(path string) (priv, pub string, err error) {
 	if path != "" {

@@ -85,6 +85,15 @@ func (c *HubClient) Register(ctx context.Context, req protocol.RegisterRequest) 
 	return &out, nil
 }
 
+// SyncAllowlist pushes center-held edge join tokens to the thin hub (PUT /hub/allowlist).
+func (c *HubClient) SyncAllowlist(ctx context.Context, tokens []protocol.AllowlistToken) (*protocol.AllowlistSyncResponse, error) {
+	var out protocol.AllowlistSyncResponse
+	if err := c.doJSON(ctx, http.MethodPut, "/hub/allowlist", protocol.AllowlistSyncRequest{Tokens: tokens}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Send writes a control message on the active WebSocket.
 func (c *HubClient) Send(env protocol.Envelope) error {
 	c.mu.Lock()
@@ -103,7 +112,7 @@ type Handlers struct {
 }
 
 // RunControlWS connects to the control channel, sends heartbeats, and dispatches messages.
-func (c *HubClient) RunControlWS(ctx context.Context, agentID string, heartbeat time.Duration, h Handlers) error {
+func (c *HubClient) RunControlWS(ctx context.Context, agentID, hubID string, heartbeat time.Duration, h Handlers) error {
 	u, err := url.Parse(c.baseURL)
 	if err != nil {
 		return err
@@ -135,6 +144,7 @@ func (c *HubClient) RunControlWS(ctx context.Context, agentID string, heartbeat 
 	if err := conn.WriteJSON(protocol.Envelope{
 		Type:    protocol.TypeHello,
 		AgentID: agentID,
+		HubID:   hubID,
 		Token:   c.token,
 	}); err != nil {
 		return err

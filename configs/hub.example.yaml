@@ -1,6 +1,17 @@
-# svc-peer hub example configuration
+# svc-peer thin hub (NAT bridge / signaling) — Model 1 or self-host colocation
 listen_addr: ":8080"
-hub_secret: "change-me-hub-secret"
+hub_id: "hub-main"
+
+# Shared with center agent config. Center first-register only (claims sole center).
+# Not used by edges; not day-to-day edge mint.
+center_bootstrap: "change-me-center-bootstrap"
+
+# Optional ops / break-glass management token seed (not primary edge onboarding).
+management_token_seed: "change-me-management-token"
+
+# HMAC key shared with the relay process (ticket verification). Not an auth token.
+relay_secret: "change-me-relay-secret"
+
 overlay_cidr: "10.10.0.0/16"
 dns_suffix: "peer.local"
 stun_urls:
@@ -9,13 +20,3 @@ relay_urls:
   - "udp://127.0.0.1:3478"
   - "ws://127.0.0.1:3479/relay"
 heartbeat_timeout_sec: 45
-
-pre_seed_tokens:
-  - id: "seed-cam-01"
-    token: "spt_dev_cam_warehouse_01_replace_me"
-    label: "cam-warehouse-01"
-    tags: ["warehouse", "camera"]
-  - id: "seed-viewer-01"
-    token: "spt_dev_viewer_01_replace_me"
-    label: "viewer-01"
-    tags: ["viewer"]

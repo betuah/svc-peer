@@ -12,7 +12,7 @@ type Config struct {
 	UDPListenAddr  string `yaml:"udp_listen_addr"`
 	HTTPListenAddr string `yaml:"http_listen_addr"`
 	HubURL         string `yaml:"hub_url"`
-	// RelaySecret must match hub hub_secret (HMAC ticket verification).
+	// RelaySecret must match hub relay_secret (HMAC ticket verification). Not an auth token.
 	RelaySecret string `yaml:"relay_secret"`
 }
 
@@ -22,7 +22,7 @@ func DefaultConfig() Config {
 		UDPListenAddr:  ":3478",
 		HTTPListenAddr: ":3479",
 		HubURL:         "http://127.0.0.1:8080",
-		RelaySecret:    "change-me-hub-secret",
+		RelaySecret:    "change-me-relay-secret",
 	}
 }
 

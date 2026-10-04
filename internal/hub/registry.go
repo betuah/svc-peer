@@ -7,20 +7,26 @@ import (
 	"time"
 
 	"github.com/betuah/svc-peer/internal/protocol"
-	"github.com/google/uuid"
 )
 
 var (
-	ErrAgentNotFound = errors.New("agent not found")
-	ErrPublicKeyUsed = errors.New("public key already bound to another agent")
+	ErrAgentNotFound     = errors.New("agent not found")
+	ErrPublicKeyUsed     = errors.New("public key already bound to another agent")
+	ErrAgentIDCollision  = errors.New("agent_id already bound to a different identity")
+	ErrCenterExists      = errors.New("center already claimed for this hub_id")
+	ErrCenterRequired    = errors.New("center not registered yet")
+	ErrInvalidAgentID    = errors.New("agent_id is required")
+	ErrInvalidRole       = errors.New("invalid role")
 )
 
 // Agent is a registered peer identity in the hub registry.
 type Agent struct {
 	ID           string
+	HubID        string
+	Role         string // center | edge
 	Name         string
 	PublicKey    string
-	OverlayIP    netip.Prefix // /32 assignment
+	OverlayIP    netip.Prefix
 	DNSName      string
 	Tags         []string
 	Capabilities []string
@@ -29,22 +35,27 @@ type Agent struct {
 	Online       bool
 	LastSeen     time.Time
 	Endpoints    []protocol.Endpoint
-	TokenID      string
+	TokenID      string // empty for center (bootstrap); edge join token id otherwise
 }
 
-// Registry tracks agents, presence, and IPAM from the configured overlay CIDR.
+// Registry tracks agents, presence, roles, and IPAM for one hub_id.
 type Registry struct {
-	mu         sync.RWMutex
-	agents     map[string]*Agent
-	byPubKey   map[string]string // pubkey → agent ID
-	ipam       *IPAM
-	dnsSuffix  string
-	revision   uint64
-	hbTimeout  time.Duration
+	mu           sync.RWMutex
+	hubID        string
+	agents       map[string]*Agent
+	byPubKey     map[string]string
+	centerID     string
+	ipam         *IPAM
+	dnsSuffix    string
+	revision     uint64
+	hbTimeout    time.Duration
 }
 
-// NewRegistry creates a registry with IPAM from overlayCIDR.
-func NewRegistry(overlayCIDR, dnsSuffix string, heartbeatTimeout time.Duration) (*Registry, error) {
+// NewRegistry creates a registry with IPAM from overlayCIDR, scoped to hubID.
+func NewRegistry(hubID, overlayCIDR, dnsSuffix string, heartbeatTimeout time.Duration) (*Registry, error) {
+	if hubID == "" {
+		return nil, errors.New("hub_id is required")
+	}
 	ipam, err := NewIPAM(overlayCIDR)
 	if err != nil {
 		return nil, err
@@ -53,6 +64,7 @@ func NewRegistry(overlayCIDR, dnsSuffix string, heartbeatTimeout time.Duration) 
 		dnsSuffix = "peer.local"
 	}
 	return &Registry{
+		hubID:     hubID,
 		agents:    make(map[string]*Agent),
 		byPubKey:  make(map[string]string),
 		ipam:      ipam,
@@ -61,51 +73,61 @@ func NewRegistry(overlayCIDR, dnsSuffix string, heartbeatTimeout time.Duration) 
 	}, nil
 }
 
-// RegisterFirstOrReconnect creates Agent ID on first register, or restores the same agent.
-func (r *Registry) RegisterFirstOrReconnect(tokenID, existingAgentID string, req protocol.RegisterRequest) (*Agent, bool, error) {
+// HubID returns the registry's hub scope.
+func (r *Registry) HubID() string { return r.hubID }
+
+// CenterAgentID returns the sole center agent id, or empty if none.
+func (r *Registry) CenterAgentID() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.centerID
+}
+
+// RegisterPresented creates or reconnects using a locally generated agent_id.
+// Hub does not mint Agent IDs. tokenID is empty for center bootstrap path.
+func (r *Registry) RegisterPresented(agentID, tokenID, role string, req protocol.RegisterRequest) (*Agent, bool, error) {
+	if agentID == "" {
+		return nil, false, ErrInvalidAgentID
+	}
+	switch role {
+	case protocol.RoleCenter, protocol.RoleEdge:
+	default:
+		return nil, false, ErrInvalidRole
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	now := time.Now().UTC()
 
-	// Reconnect path: token already bound.
-	if existingAgentID != "" {
-		a, ok := r.agents[existingAgentID]
-		if !ok {
-			return nil, false, ErrAgentNotFound
+	if existing, ok := r.agents[agentID]; ok {
+		// Collision: same agent_id already bound to a different credential.
+		if tokenID != "" && existing.TokenID != "" && existing.TokenID != tokenID {
+			return nil, false, ErrAgentIDCollision
 		}
-		if req.PublicKey != "" && req.PublicKey != a.PublicKey {
-			if other, taken := r.byPubKey[req.PublicKey]; taken && other != a.ID {
-				return nil, false, ErrPublicKeyUsed
-			}
-			delete(r.byPubKey, a.PublicKey)
-			a.PublicKey = req.PublicKey
-			r.byPubKey[a.PublicKey] = a.ID
+		if existing.Role != role {
+			return nil, false, ErrAgentIDCollision
 		}
-		if req.Name != "" {
-			a.Name = req.Name
-			a.DNSName = dnsName(req.Name, r.dnsSuffix)
+		if role == protocol.RoleCenter && r.centerID != "" && r.centerID != agentID {
+			return nil, false, ErrCenterExists
 		}
-		if req.Tags != nil {
-			a.Tags = append([]string(nil), req.Tags...)
+		if err := r.updateExistingLocked(existing, req, now); err != nil {
+			return nil, false, err
 		}
-		if req.Capabilities != nil {
-			a.Capabilities = append([]string(nil), req.Capabilities...)
-		}
-		if req.Platform != "" {
-			a.Platform = req.Platform
-		}
-		if req.WGBackend != "" {
-			a.WGBackend = req.WGBackend
-		}
-		a.Online = true
-		a.LastSeen = now
-		r.revision++
-		cp := *a
+		cp := *existing
 		return &cp, false, nil
 	}
 
-	// First successful register for this token.
+	// First register for this agent_id.
+	if role == protocol.RoleCenter {
+		if r.centerID != "" {
+			return nil, false, ErrCenterExists
+		}
+	} else if r.centerID == "" {
+		// Edges may register before center for allowlist caching, but netmap needs center.
+		// Allow edge register without center (they'll get empty peers until center joins).
+	}
+
 	if req.PublicKey == "" {
 		return nil, false, errors.New("public_key is required")
 	}
@@ -113,7 +135,7 @@ func (r *Registry) RegisterFirstOrReconnect(tokenID, existingAgentID string, req
 		return nil, false, errors.New("name is required")
 	}
 	if other, taken := r.byPubKey[req.PublicKey]; taken {
-		return nil, false, fmtPubkeyTaken(other)
+		return nil, false, errors.New("public key already bound to agent " + other)
 	}
 
 	ip, err := r.ipam.Allocate()
@@ -122,7 +144,9 @@ func (r *Registry) RegisterFirstOrReconnect(tokenID, existingAgentID string, req
 	}
 
 	a := &Agent{
-		ID:           uuid.NewString(),
+		ID:           agentID,
+		HubID:        r.hubID,
+		Role:         role,
 		Name:         req.Name,
 		PublicKey:    req.PublicKey,
 		OverlayIP:    netip.PrefixFrom(ip, 32),
@@ -137,13 +161,43 @@ func (r *Registry) RegisterFirstOrReconnect(tokenID, existingAgentID string, req
 	}
 	r.agents[a.ID] = a
 	r.byPubKey[a.PublicKey] = a.ID
+	if role == protocol.RoleCenter {
+		r.centerID = a.ID
+	}
 	r.revision++
 	cp := *a
 	return &cp, true, nil
 }
 
-func fmtPubkeyTaken(other string) error {
-	return errors.New("public key already bound to agent " + other)
+func (r *Registry) updateExistingLocked(a *Agent, req protocol.RegisterRequest, now time.Time) error {
+	if req.PublicKey != "" && req.PublicKey != a.PublicKey {
+		if other, taken := r.byPubKey[req.PublicKey]; taken && other != a.ID {
+			return ErrPublicKeyUsed
+		}
+		delete(r.byPubKey, a.PublicKey)
+		a.PublicKey = req.PublicKey
+		r.byPubKey[a.PublicKey] = a.ID
+	}
+	if req.Name != "" {
+		a.Name = req.Name
+		a.DNSName = dnsName(req.Name, r.dnsSuffix)
+	}
+	if req.Tags != nil {
+		a.Tags = append([]string(nil), req.Tags...)
+	}
+	if req.Capabilities != nil {
+		a.Capabilities = append([]string(nil), req.Capabilities...)
+	}
+	if req.Platform != "" {
+		a.Platform = req.Platform
+	}
+	if req.WGBackend != "" {
+		a.WGBackend = req.WGBackend
+	}
+	a.Online = true
+	a.LastSeen = now
+	r.revision++
+	return nil
 }
 
 // Heartbeat marks an agent online and updates last seen.
@@ -168,7 +222,7 @@ func (r *Registry) SetOffline(agentID string) {
 	}
 }
 
-// SweepOffline marks agents past heartbeat timeout as offline. Returns IDs flipped.
+// SweepOffline marks agents past heartbeat timeout as offline.
 func (r *Registry) SweepOffline() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -210,7 +264,7 @@ func (r *Registry) Get(id string) (*Agent, error) {
 	return &cp, nil
 }
 
-// List returns agents, optionally only online.
+// List returns agents on this hub, optionally only online.
 func (r *Registry) List(onlineOnly bool) []protocol.AgentSummary {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -222,6 +276,7 @@ func (r *Registry) List(onlineOnly bool) []protocol.AgentSummary {
 		out = append(out, protocol.AgentSummary{
 			ID:           a.ID,
 			Name:         a.Name,
+			Role:         a.Role,
 			OverlayIP:    a.OverlayIP.Addr().String(),
 			DNSName:      a.DNSName,
 			Tags:         append([]string(nil), a.Tags...),
@@ -231,6 +286,14 @@ func (r *Registry) List(onlineOnly bool) []protocol.AgentSummary {
 		})
 	}
 	return out
+}
+
+// BumpRevision increments the netmap revision.
+func (r *Registry) BumpRevision() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.revision++
+	return r.revision
 }
 
 // Revision returns the current netmap revision.
@@ -253,7 +316,7 @@ func (r *Registry) OnlineCount() int {
 	return n
 }
 
-// SnapshotAgents returns a copy of all agents (for netmap building).
+// SnapshotAgents returns a copy of all agents.
 func (r *Registry) SnapshotAgents() []*Agent {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

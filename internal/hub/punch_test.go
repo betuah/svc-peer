@@ -1,5 +1,3 @@
-// Unit tests: relay ticket claims and punch coordination (no WS peers).
-
 package hub
 
 import (
@@ -12,14 +10,14 @@ import (
 )
 
 func TestIssueRelayTicketClaims(t *testing.T) {
-	tok, exp, err := ticket.Issue("change-me-hub-secret", "agent-1", "agent-2", 10*time.Minute)
+	tok, exp, err := ticket.Issue("change-me-relay-secret", "agent-1", "agent-2", 10*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if exp.Before(time.Now()) {
 		t.Fatal("exp")
 	}
-	claims, err := ticket.Verify("change-me-hub-secret", tok, "agent-2", "agent-1")
+	claims, err := ticket.Verify("change-me-relay-secret", tok, "agent-2", "agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,9 +26,12 @@ func TestIssueRelayTicketClaims(t *testing.T) {
 	}
 }
 
-func TestCoordinatePunchRequiresEndpoints(t *testing.T) {
+func TestCoordinatePunchOnlyAllowedPairs(t *testing.T) {
 	h, err := New(Config{
-		HubSecret:           "s",
+		HubID:               "hub-main",
+		CenterBootstrap:     "boot",
+		ManagementTokenSeed: "mgmt",
+		RelaySecret:         "relay",
 		OverlayCIDR:         "10.10.0.0/16",
 		DNSSuffix:           "peer.local",
 		HeartbeatTimeoutSec: 45,
@@ -39,27 +40,36 @@ func TestCoordinatePunchRequiresEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	k1, err := wgtypes.GeneratePrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	k2, err := wgtypes.GeneratePrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	a, _, err := h.reg.RegisterFirstOrReconnect("t1", "", protocol.RegisterRequest{
-		Name: "a", PublicKey: k1.PublicKey().String(),
+	k1, _ := wgtypes.GeneratePrivateKey()
+	k2, _ := wgtypes.GeneratePrivateKey()
+	k3, _ := wgtypes.GeneratePrivateKey()
+	c, _, err := h.reg.RegisterPresented("c", "", protocol.RoleCenter, protocol.RegisterRequest{
+		Name: "c", PublicKey: k1.PublicKey().String(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _, err := h.reg.RegisterFirstOrReconnect("t2", "", protocol.RegisterRequest{
-		Name: "b", PublicKey: k2.PublicKey().String(),
+	e1, _, err := h.reg.RegisterPresented("e1", "t1", protocol.RoleEdge, protocol.RegisterRequest{
+		Name: "e1", PublicKey: k2.PublicKey().String(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = h.reg.UpdateEndpoints(a.ID, []protocol.Endpoint{{IP: "1.1.1.1", Port: 51820, Proto: "udp", Src: "host"}})
-	_ = h.reg.UpdateEndpoints(b.ID, []protocol.Endpoint{{IP: "2.2.2.2", Port: 51820, Proto: "udp", Src: "srflx"}})
-	h.coordinatePunch(a.ID)
+	e2, _, err := h.reg.RegisterPresented("e2", "t2", protocol.RoleEdge, protocol.RegisterRequest{
+		Name: "e2", PublicKey: k3.PublicKey().String(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = h.reg.UpdateEndpoints(c.ID, []protocol.Endpoint{{IP: "1.1.1.1", Port: 51820, Proto: "udp", Src: "host"}})
+	_ = h.reg.UpdateEndpoints(e1.ID, []protocol.Endpoint{{IP: "2.2.2.2", Port: 51820, Proto: "udp", Src: "host"}})
+	_ = h.reg.UpdateEndpoints(e2.ID, []protocol.Endpoint{{IP: "3.3.3.3", Port: 51820, Proto: "udp", Src: "srflx"}})
+	// Edge↔edge not allowed; edge↔center is — should not panic.
+	h.coordinatePunch(e1.ID)
+	if h.netmap.AllowedPeer(e1.ID, e2.ID) {
+		t.Fatal("edge↔edge should be denied")
+	}
+	if !h.netmap.AllowedPeer(e1.ID, c.ID) {
+		t.Fatal("edge↔center should be allowed")
+	}
 }

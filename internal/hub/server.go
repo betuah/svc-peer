@@ -20,7 +20,6 @@ func (h *Hub) Router() http.Handler {
 	api := h.api
 	r.Get("/health", api.Health)
 
-	// REST routes get a request timeout; WS must not (long-lived control channel).
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Timeout(60 * time.Second))
 		r.Route("/api/v1", func(r chi.Router) {
@@ -29,10 +28,15 @@ func (h *Hub) Router() http.Handler {
 			r.Get("/agents/{id}", api.GetAgent)
 			r.Get("/netmap", api.GetNetmap)
 		})
-		// Hub token management (hub_secret). Public shape: /hub/tokens
+		// Center → hub allowlist sync (primary edge token path)
+		r.Put("/hub/allowlist", api.SyncAllowlist)
+		// Break-glass ops (management); revoke also accepts center_bootstrap
 		r.Post("/hub/tokens", api.CreateToken)
 		r.Delete("/hub/tokens/{id}", api.RevokeToken)
 		r.Post("/hub/tokens/{id}/rotate", api.RotateToken)
+		r.Post("/hub/grants", api.CreateGrant)
+		r.Get("/hub/grants", api.ListGrants)
+		r.Delete("/hub/grants/{id}", api.RevokeGrant)
 	})
 
 	r.Get("/ws/v1/agent", h.HandleAgentWS)
@@ -51,7 +55,12 @@ func (h *Hub) ListenAndServe(ctx context.Context) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		h.log.Info("hub listening", "addr", h.cfg.ListenAddr, "overlay_cidr", h.cfg.OverlayCIDR)
+		h.log.Info("hub listening",
+			"addr", h.cfg.ListenAddr,
+			"hub_id", h.cfg.HubID,
+			"overlay_cidr", h.cfg.OverlayCIDR,
+			"role", "nat-bridge",
+		)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}

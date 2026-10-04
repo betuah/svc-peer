@@ -59,15 +59,23 @@ func KeyToHex(base64Key string) (string, error) {
 	return hex.EncodeToString(k[:]), nil
 }
 
+func peerLabel(p protocol.PeerConfig) string {
+	if p.PeerID != "" {
+		return p.PeerID
+	}
+	return p.AgentID
+}
+
 func peersToWG(peers []protocol.PeerConfig) ([]wgtypes.PeerConfig, error) {
 	out := make([]wgtypes.PeerConfig, 0, len(peers))
 	for _, p := range peers {
 		if p.PublicKey == "" {
 			continue
 		}
+		label := peerLabel(p)
 		pk, err := wgtypes.ParseKey(p.PublicKey)
 		if err != nil {
-			return nil, fmt.Errorf("peer %s public key: %w", p.AgentID, err)
+			return nil, fmt.Errorf("peer %s public key: %w", label, err)
 		}
 		pc := wgtypes.PeerConfig{
 			PublicKey:         pk,
@@ -79,7 +87,7 @@ func peersToWG(peers []protocol.PeerConfig) ([]wgtypes.PeerConfig, error) {
 				// allow bare IP → /32 or /128
 				addr := net.ParseIP(ip)
 				if addr == nil {
-					return nil, fmt.Errorf("peer %s allowed_ip %q: %w", p.AgentID, ip, err)
+					return nil, fmt.Errorf("peer %s allowed_ip %q: %w", label, ip, err)
 				}
 				bits := 32
 				if addr.To4() == nil {
@@ -92,7 +100,7 @@ func peersToWG(peers []protocol.PeerConfig) ([]wgtypes.PeerConfig, error) {
 		if p.Endpoint != "" {
 			udp, err := net.ResolveUDPAddr("udp", p.Endpoint)
 			if err != nil {
-				return nil, fmt.Errorf("peer %s endpoint: %w", p.AgentID, err)
+				return nil, fmt.Errorf("peer %s endpoint: %w", label, err)
 			}
 			pc.Endpoint = udp
 		}
