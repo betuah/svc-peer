@@ -4,7 +4,7 @@ token: "spt_dev_viewer_01_replace_me"
 name: "viewer-01"
 tags: ["viewer"]
 capabilities: []
-wg_backend: "auto"
+wg_backend: "auto" # kernel-first; wireguard-go fallback
 wg_interface: "sp1"
 wg_listen_port: 51821
 heartbeat_sec: 15

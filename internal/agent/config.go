@@ -12,7 +12,7 @@ type Config struct {
 	HubURL         string `yaml:"hub_url"`
 	Token          string `yaml:"token"`
 	Name           string `yaml:"name"`
-	WGBackend      string `yaml:"wg_backend"` // auto | kernel | userspace
+	WGBackend      string `yaml:"wg_backend"` // auto (kernel-first) | kernel | userspace
 	WGInterface    string `yaml:"wg_interface"`
 	WGListenPort   int      `yaml:"wg_listen_port"`
 	HeartbeatSec   int      `yaml:"heartbeat_sec"`
@@ -59,6 +59,14 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if cfg.DirectWaitSec <= 0 {
 		cfg.DirectWaitSec = 8
+	}
+	switch cfg.WGBackend {
+	case "", "auto", "kernel", "userspace":
+		if cfg.WGBackend == "" {
+			cfg.WGBackend = "auto"
+		}
+	default:
+		return cfg, fmt.Errorf("wg_backend must be auto|kernel|userspace (got %q)", cfg.WGBackend)
 	}
 	return cfg, nil
 }

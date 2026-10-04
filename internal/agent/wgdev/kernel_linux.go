@@ -16,17 +16,6 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
-// KernelAvailable reports whether the WireGuard kernel module/API is usable.
-func KernelAvailable() bool {
-	client, err := wgctrl.New()
-	if err != nil {
-		return false
-	}
-	defer client.Close()
-	_, err = client.Devices()
-	return err == nil
-}
-
 type wgLink struct {
 	attrs netlink.LinkAttrs
 }
