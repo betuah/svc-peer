@@ -66,6 +66,29 @@ docker compose --profile agents up -d --build
 
 Replace example secrets before shared or production use. Deploy modes, hub TLS, placement, and capability notes: [docs/deploy.md](docs/deploy.md).
 
+## Make targets
+
+| Target | Action |
+|--------|--------|
+| `make build` | Build `bin/hub`, `bin/agent`, `bin/relay` |
+| `make test` | Unit tests (`go test ./...`) |
+| `make test-integration` | Integration suite (`-tags=integration`) |
+| `make docker-build` | Build the three local images |
+| `make compose-up` / `make compose-down` | Hub + relay Compose stack |
+| `make certs` | Self-signed PEMs in `./certs` for local hub TLS |
+| `make smoke-hub` | `GET /health` on the hub (`HUB_URL` optional) |
+
+```bash
+make build
+make test
+make certs                 # writes certs/cert.pem and certs/key.pem (gitignored)
+make compose-up
+make smoke-hub             # plain HTTP by default
+# HUB_URL=https://127.0.0.1:8080 make smoke-hub   # after enabling hub TLS
+```
+
+Agent local APIs (`:9100` / `:9101`) require `docker compose --profile agents up -d` (needs `/dev/net/tun`). Mount `./certs` and set `tls_cert_file` / `tls_key_file` as in [docs/deploy.md](docs/deploy.md).
+
 ## Layout
 
 ```
@@ -78,6 +101,8 @@ internal/relay               UDP + WebSocket forwarders
 configs/                     example YAML
 configs/compose/             Compose service configs
 docs/                        architecture, deploy, API
+scripts/                     gen-dev-certs, smoke-hub
+Makefile                     common build/test/compose/cert targets
 Dockerfile.hub|agent|relay   per-binary images
 docker-compose.yml           hub, relay, optional agents profile
 .github/workflows/ci.yml     vet, build, unit + integration tests
@@ -87,8 +112,9 @@ test/integration/            integration tests (build tag integration)
 ## Tests
 
 ```bash
-go test ./...
-go test -tags=integration ./test/integration/...
+make test
+make test-integration
+# or: go test ./... && go test -tags=integration ./test/integration/...
 ```
 
 CI: [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `go vet`, `go build ./...`, `go test ./...`, and integration tests on PRs and `main`.
