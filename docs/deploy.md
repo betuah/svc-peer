@@ -123,6 +123,37 @@ Mount config at `/etc/svc-peer/config.yaml` (image default `-config` path), or p
 
 Agent containers need `CAP_NET_ADMIN` (and usually `CAP_NET_RAW`) plus `/dev/net/tun`. Kernel WG also needs the host `wireguard` module; compose examples set `wg_backend: userspace` so agents can run with a TUN device alone.
 
+### Published images (GHCR)
+
+Pushing a Git tag matching `v*` (for example `v0.1.0`) runs [`.github/workflows/release-images.yml`](../.github/workflows/release-images.yml). That workflow builds each Dockerfile and pushes three packages to GitHub Container Registry:
+
+| Image | Dockerfile |
+|-------|------------|
+| `ghcr.io/betuah/svc-peer-hub` | `Dockerfile.hub` |
+| `ghcr.io/betuah/svc-peer-agent` | `Dockerfile.agent` |
+| `ghcr.io/betuah/svc-peer-relay` | `Dockerfile.relay` |
+
+Semver tags (for example `v1.2.3`) publish the version without the leading `v` (and `major.minor`), plus `latest` for non-prerelease versions. Pre-release tags such as `v1.2.3-rc.1` get version tags only.
+
+```bash
+# Public packages (after package visibility is set to Public)
+docker pull ghcr.io/betuah/svc-peer-hub:latest
+docker pull ghcr.io/betuah/svc-peer-agent:1.2.3
+docker pull ghcr.io/betuah/svc-peer-relay:1.2.3
+
+# Private packages: authenticate with a PAT that has read:packages
+echo "$GHCR_TOKEN" | docker login ghcr.io -u USERNAME --password-stdin
+```
+
+Release steps:
+
+1. Merge the release commit to `main`.
+2. Create and push an annotated or lightweight tag: `git tag v0.1.0 && git push origin v0.1.0`.
+3. Confirm the `release-images` workflow succeeded under Actions.
+4. On first publish, open each package under the GitHub org/user **Packages** page and set visibility (Public if pulls should work without auth). Optionally link the package to this repository.
+
+The workflow uses `GITHUB_TOKEN` with `packages: write`; no extra registry secret is required for push.
+
 ## Docker Compose
 
 `docker-compose.yml` defines `hub` and `relay` by default. Center/edge agents are under the `agents` profile (TUN + capabilities). Compose configs live under `configs/compose/` (service DNS names `hub` / `relay`; local API bound on `0.0.0.0` for container access).
