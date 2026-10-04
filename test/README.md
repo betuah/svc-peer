@@ -14,6 +14,7 @@ internal/hub/register_test.go      # local agent_id, one center, collisions, hea
 internal/hub/acl_test.go           # A2A grant store
 internal/hub/netmap_acl_test.go    # edge↔center peers only; hub not dataplane
 internal/hub/auth_roles_test.go    # center_bootstrap, allowlist sync, hub isolation
+internal/hub/persist_test.go       # JSON state reload; offline after restart
 internal/hub/punch_test.go         # punch only for allowed pairs
 internal/agent/identity/           # local agent_id persist
 internal/agent/config_test.go
@@ -28,6 +29,7 @@ internal/agent/wgdev/*
 
 ```
 test/integration/hub_api_test.go     # local id persist, center+allowlist, edge↔center netmap
+test/integration/hub_persist_test.go # hub restart membership + center allowlist re-sync
 test/integration/local_api_test.go   # agent local HTTP peers/status with hub registry
 ```
 
