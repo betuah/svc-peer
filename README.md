@@ -109,8 +109,14 @@ configs/              example YAML
 
 ## Tests
 
+Unit tests live next to packages; integration/smoke tests live under `test/integration/` (build tag). Details: [test/README.md](./test/README.md).
+
 ```bash
+# Unit only (default)
 go test ./...
+
+# Integration / control-plane smoke
+go test -tags=integration ./test/integration/...
 ```
 
 ## License

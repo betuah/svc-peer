@@ -1,3 +1,5 @@
+// Unit tests: WG keygen and peer config conversion.
+
 package wgdev
 
 import (

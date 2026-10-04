@@ -1,3 +1,5 @@
+// Unit tests: token bind on first register, reconnect identity, heartbeat, netmap DNS.
+
 package hub
 
 import (

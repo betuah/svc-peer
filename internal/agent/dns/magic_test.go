@@ -1,3 +1,5 @@
+// Unit tests: agent-local MagicDNS resolver.
+
 package dns
 
 import "testing"

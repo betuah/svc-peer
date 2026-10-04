@@ -1,3 +1,5 @@
+// Unit tests: relay announce/data frame codec.
+
 package relay
 
 import (

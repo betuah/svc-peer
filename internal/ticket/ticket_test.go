@@ -1,3 +1,5 @@
+// Unit tests: HMAC relay ticket issue/verify/expiry.
+
 package ticket
 
 import (

@@ -1,3 +1,5 @@
+// Unit tests: relay ticket claims and punch coordination (no WS peers).
+
 package hub
 
 import (
