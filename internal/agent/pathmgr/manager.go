@@ -206,6 +206,21 @@ func (m *Manager) setPath(peerID, path string) {
 	m.mu.Unlock()
 }
 
+// SnapshotPeers returns a copy of the current netmap peer set and active path per peer.
+func (m *Manager) SnapshotPeers() (peers []protocol.PeerConfig, paths map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	peers = make([]protocol.PeerConfig, 0, len(m.peers))
+	paths = make(map[string]string, len(m.path))
+	for _, p := range m.peers {
+		peers = append(peers, p)
+	}
+	for id, path := range m.path {
+		paths[id] = path
+	}
+	return peers, paths
+}
+
 func endpointString(c protocol.Endpoint) string {
 	return c.IP + ":" + strconv.Itoa(c.Port)
 }

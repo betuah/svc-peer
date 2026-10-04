@@ -1,0 +1,4 @@
+udp_listen_addr: ":3478"
+http_listen_addr: ":3479"
+hub_url: "http://hub:8080"
+relay_secret: "change-me-relay-secret"

@@ -1,4 +1,4 @@
-# svc-peer center agent (business authority + main app) — exactly one per hub_id
+# svc-peer center agent (role=center; network authority) — exactly one per hub_id
 hub_url: "http://127.0.0.1:8080"
 hub_id: "hub-main"
 role: "center"
@@ -13,6 +13,8 @@ wg_interface: "sp0"
 wg_listen_port: 51820
 heartbeat_sec: 15
 direct_wait_sec: 8
+# Agent-local HTTP API (loopback). Empty disables.
+local_api_listen: "127.0.0.1:9100"
 
 # Edge join tokens created/configured on center; synced to hub allowlist on start.
 edge_tokens:

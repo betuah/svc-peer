@@ -1,0 +1,14 @@
+hub_url: "http://hub:8080"
+hub_id: "hub-main"
+role: "edge"
+token: "spt_dev_cam_warehouse_01_replace_me"
+name: "cam-warehouse-01"
+state_dir: "/var/lib/svc-peer/edge"
+tags: ["warehouse", "camera"]
+capabilities: ["video/rtsp"]
+wg_backend: "userspace"
+wg_interface: "sp0"
+wg_listen_port: 51820
+heartbeat_sec: 15
+direct_wait_sec: 8
+local_api_listen: "0.0.0.0:9100"

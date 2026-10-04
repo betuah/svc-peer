@@ -26,6 +26,16 @@ type InterfaceConfig struct {
 	MTU        int
 }
 
+// PeerStats is WireGuard device traffic/handshake state for one peer.
+// TX/RX come from kernel wgctrl or userspace wireguard-go IPC stats — not the hub.
+type PeerStats struct {
+	PublicKey     string
+	Endpoint      string
+	LastHandshake time.Time
+	ReceiveBytes  uint64
+	TransmitBytes uint64
+}
+
 // Device is the agent WireGuard data-plane interface.
 type Device interface {
 	Backend() string
@@ -33,6 +43,9 @@ type Device interface {
 	ConfigurePeers(revision uint64, peers []protocol.PeerConfig) error
 	UpdatePeerEndpoint(publicKey, endpoint string) error
 	PeerLastHandshake(publicKey string) (time.Time, bool, error)
+	// PeerStats returns device-level stats for a peer public key.
+	// ok is false when the peer is not present on the device.
+	PeerStats(publicKey string) (stats PeerStats, ok bool, err error)
 	Close() error
 }
 

@@ -7,11 +7,13 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/betuah/svc-peer/internal/agent/dns"
 	"github.com/betuah/svc-peer/internal/agent/endpoint"
 	"github.com/betuah/svc-peer/internal/agent/identity"
+	"github.com/betuah/svc-peer/internal/agent/localapi"
 	"github.com/betuah/svc-peer/internal/agent/pathmgr"
 	"github.com/betuah/svc-peer/internal/agent/relayclient"
 	"github.com/betuah/svc-peer/internal/agent/wgdev"
@@ -29,12 +31,16 @@ type Agent struct {
 	relay   *relayclient.Client
 	paths   *pathmgr.Manager
 	agentID string
-	hubID   string
-	role    string
 	pubKey  string
 	privKey string
 	stun    []string
 	relays  []string
+
+	mu            sync.RWMutex
+	hubID         string
+	role          string
+	overlayIP     string
+	centerAgentID string
 }
 
 // New constructs an agent from config.
@@ -85,11 +91,16 @@ func (a *Agent) Run(ctx context.Context) error {
 	if reg.AgentID != a.agentID {
 		return fmt.Errorf("hub returned different agent_id: local=%s hub=%s", a.agentID, reg.AgentID)
 	}
-	a.hubID = reg.HubID
-	if a.hubID == "" {
-		a.hubID = a.cfg.HubID
+	hubID := reg.HubID
+	if hubID == "" {
+		hubID = a.cfg.HubID
 	}
+	a.mu.Lock()
+	a.hubID = hubID
 	a.role = reg.Role
+	a.overlayIP = reg.OverlayIP
+	a.centerAgentID = reg.CenterAgentID
+	a.mu.Unlock()
 	a.stun = reg.STUNURLs
 	a.relays = reg.RelayURLs
 	a.dns.Update(reg.DNSMap)
@@ -109,6 +120,15 @@ func (a *Agent) Run(ctx context.Context) error {
 		"peers", len(reg.Peers),
 		"wg_backend", a.device.Backend(),
 	)
+
+	if a.cfg.LocalAPIListen != "" {
+		localSrv := localapi.New(localView{a: a}, a.log)
+		go func() {
+			if err := localSrv.Start(ctx, a.cfg.LocalAPIListen); err != nil && err != context.Canceled {
+				a.log.Error("local api stopped", "err", err)
+			}
+		}()
+	}
 
 	// Center syncs edge join-token allowlist to thin hub (primary edge onboarding path).
 	if a.cfg.Role == protocol.RoleCenter && len(a.cfg.EdgeTokens) > 0 {
@@ -144,7 +164,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	hb := time.Duration(a.cfg.HeartbeatSec) * time.Second
 	wsErr := make(chan error, 1)
 	go func() {
-		wsErr <- a.client.RunControlWS(ctx, a.agentID, a.hubID, hb, Handlers{
+		wsErr <- a.client.RunControlWS(ctx, a.agentID, hubID, hb, Handlers{
 			OnNetmap: func(env protocol.Envelope) {
 				a.dns.Update(env.DNSMap)
 				if err := a.paths.ApplyNetmap(ctx, env.Revision, env.Peers); err != nil {

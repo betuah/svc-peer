@@ -1,60 +1,42 @@
 # svc-peer
 
-WireGuard overlay: **one center** (business authority + main app) + many **edge** agents per `hub_id`. Happy-path app data is **direct WG edge↔center**. Cloud hub is a **NAT bridge** (STUN + relay + thin signaling) — not the app dataplane next-hop, not day-to-day token mint.
+svc-peer is a WireGuard overlay control and data-plane stack written in Go. It provides a multi-tenant overlay (`hub_id`) with exactly one **center** agent and many **edge** agents. Application traffic uses direct WireGuard between edge and center. The hub assists with NAT (STUN, relay, thin signaling) and is not the preferred path for application data.
 
-Greenfield Go (`github.com/betuah/svc-peer`). Inspired by Tailscale / Headscale / Netbird patterns — not a fork.
+The center agent (`role=center`) is the network authority for join tokens, allowlist sync, ACL, and membership. The main business application is a separate process that only consumes overlay IPs / MagicDNS.
 
-## Roles & ACL
+## Binaries
+
+| Binary | Package | Role |
+|--------|---------|------|
+| `hub` | `cmd/hub` | Thin control plane per `hub_id`: register, netmap fan-out, allowlist cache, punch/relay tickets |
+| `agent` | `cmd/agent` | Center or edge peer: local `agent_id`, WireGuard device, hub client, local HTTP API |
+| `relay` | `cmd/relay` | DERP-like forwarder for encrypted WireGuard packets when direct UDP fails |
+
+## Roles
 
 | Role | Cardinality | Dataplane peers |
 |------|-------------|-----------------|
-| **center** | Exactly one per `hub_id` | All edges |
-| **edge** | Many | **Center only** (direct WG) |
-| edge↔edge | — | **Deny** (no peer, no hairpin) |
-| hub | NAT bridge | **Not** app next-hop |
+| center | Exactly one per `hub_id` | All edges |
+| edge | Many | Center only (direct WG) |
+| edge↔edge | — | Denied unless a center-authored grant adds a direct WG peer |
+| hub | One process per deployment mode | Not an application next-hop |
 
-## Join flow (as implemented)
+## Deploy sketch
 
-1. Start thin hub (+ relay) with `hub_id` + shared `center_bootstrap`.
-2. Start **center** agent with the same `center_bootstrap` and `role: center`.
-   - Generates/persists local `agent_id` under `state_dir`
-   - Registers with bootstrap → claims sole center
-   - Syncs `edge_tokens` to hub via `PUT /hub/allowlist`
-3. Start **edge** agents with join tokens from center (`role: edge`).
-   - Each generates/persists its own local `agent_id`
-   - Registers with join token; hub rejects `agent_id` collisions
-   - Netmap peers = **[center]** only
-4. Direct WG edge↔center; STUN/punch/relay assist when NAT blocks UDP.
+**Vendor cloud (default):** run `hub` + `relay` (and STUN) in the vendor cloud. Run the center agent on the customer site next to the main app (same host, separate process). Run edge agents on remote sites. App data prefers direct WG edge↔center; cloud carries signaling and relay fallback only.
 
-## Auth & API
+**Self-host:** run `hub` + `relay` near the center agent on the customer site. Same binaries and ACL; no vendor cloud in path. Hub remains a distinct process from the center agent and from the main app.
 
-`Authorization: Bearer <credential>`
+## Join flow
 
-| Credential | Use |
-|------------|-----|
-| **`center_bootstrap`** | Center first register + allowlist sync + center session |
-| **Edge join token** | Edge register / heartbeat / netmap (created on center, synced to hub) |
-| **Management token** | Break-glass revoke/mint/ops only — not primary onboarding |
-
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| PUT | `/hub/allowlist` | center_bootstrap | Sync edge join tokens from center |
-| POST | `/hub/tokens` | management | Break-glass mint |
-| DELETE | `/hub/tokens/{id}` | center or management | Revoke |
-| POST | `/api/v1/agents/register` | bootstrap or join token | Present local `agent_id` + role |
-| GET | `/api/v1/agents` | center/edge session | Discovery + online + role |
-| GET | `/api/v1/netmap` | center/edge session | ACL peers (edge↔center) |
-| GET | `/health` | none | Includes `hub_id`, `center_agent_id` |
-
-## Privileges
-
-Creating a WireGuard / TUN interface needs **CAP_NET_ADMIN** (or run as root).
-
-```bash
-sudo setcap cap_net_admin,cap_net_raw+ep ./bin/agent
-```
+1. Start hub (+ relay) with `hub_id` and shared `center_bootstrap`.
+2. Start the center agent with matching `center_bootstrap` and `role: center`. It generates a local `agent_id`, registers, claims the sole center slot, and syncs `edge_tokens` via `PUT /hub/allowlist`.
+3. Start edge agents with join tokens from the center (`role: edge`). Each persists its own `agent_id`. Netmap peers are center-only.
+4. Direct WireGuard edge↔center; STUN/punch/relay when NAT blocks UDP.
 
 ## Build
+
+Requires Go 1.23.1 (see `go.mod`).
 
 ```bash
 go build ./...
@@ -63,33 +45,123 @@ go build -o bin/agent ./cmd/agent
 go build -o bin/relay ./cmd/relay
 ```
 
-## Smoke-test
+Creating a WireGuard or TUN interface needs `CAP_NET_ADMIN` (or root):
+
+```bash
+sudo setcap cap_net_admin,cap_net_raw+ep ./bin/agent
+```
+
+## Run (local smoke)
+
+Example configs live under `configs/`.
 
 ```bash
 go run ./cmd/hub -config configs/hub.example.yaml
 go run ./cmd/relay -config configs/relay.example.yaml
 sudo go run ./cmd/agent -config configs/agent-center.example.yaml
 sudo go run ./cmd/agent -config configs/agent.example.yaml
-sudo go run ./cmd/agent -config configs/agent-viewer.example.yaml
 ```
 
-List agents (edge token or center bootstrap):
+Hub discovery:
 
 ```bash
 curl -s -H "Authorization: Bearer spt_dev_cam_warehouse_01_replace_me" \
-  http://127.0.0.1:8080/api/v1/agents | jq
+  http://127.0.0.1:8080/api/v1/agents
 ```
+
+Center agent local API (default bind `127.0.0.1:9100`):
+
+```bash
+curl -s http://127.0.0.1:9100/local/health
+curl -s http://127.0.0.1:9100/local/peers
+```
+
+## Docker images
+
+One image per binary. Multi-stage builds; hub/relay use distroless, agent uses Alpine.
+
+| Image tag | Dockerfile | Binary |
+|-----------|------------|--------|
+| `svc-peer-hub` | `Dockerfile.hub` | `hub` |
+| `svc-peer-agent` | `Dockerfile.agent` | `agent` |
+| `svc-peer-relay` | `Dockerfile.relay` | `relay` |
+
+```bash
+docker build -f Dockerfile.hub -t svc-peer-hub:local .
+docker build -f Dockerfile.agent -t svc-peer-agent:local .
+docker build -f Dockerfile.relay -t svc-peer-relay:local .
+```
+
+The agent container needs `CAP_NET_ADMIN` (and usually `CAP_NET_RAW`) plus `/dev/net/tun` for WireGuard. Kernel WG also requires the `wireguard` module on the host; compose examples set `wg_backend: userspace` so agents can run with a TUN device alone.
+
+Mount a config file at `/etc/svc-peer/config.yaml` (image default `-config` path), or pass `-config` explicitly.
+
+## Docker Compose
+
+`docker-compose.yml` defines `hub` and `relay` by default. Center/edge agents are under the `agents` profile (TUN + capabilities).
+
+Compose-oriented configs: `configs/compose/` (service DNS names `hub` / `relay`; local API bound on `0.0.0.0`).
+
+```bash
+# Control plane only
+docker compose up -d --build
+
+curl -s http://127.0.0.1:8080/health
+
+# Hub + relay + center + edge (requires /dev/net/tun on the host)
+docker compose --profile agents up -d --build
+
+curl -s http://127.0.0.1:9100/local/health
+curl -s http://127.0.0.1:9101/local/health
+curl -s -H "Authorization: Bearer spt_dev_cam_warehouse_01_replace_me" \
+  http://127.0.0.1:8080/api/v1/agents
+```
+
+| Service | Host ports |
+|---------|------------|
+| hub | `8080` |
+| relay | `3478/udp`, `3479` |
+| agent-center | `51820/udp`, local API `9100` |
+| agent-edge | `51821/udp`, local API `9101` |
+
+Replace the example secrets in `configs/compose/*.yaml` before any shared or production use.
+
+## Configuration
+
+| File | Process |
+|------|---------|
+| `configs/hub.example.yaml` | Hub (`center_bootstrap`, overlay CIDR, STUN/relay URLs) |
+| `configs/agent-center.example.yaml` | Center agent (`center_bootstrap`, `edge_tokens`, `local_api_listen`) |
+| `configs/agent.example.yaml` | Edge agent (join token, `local_api_listen`) |
+| `configs/agent-viewer.example.yaml` | Second edge example (different WG interface / local API port) |
+| `configs/relay.example.yaml` | Relay |
+| `configs/compose/*.yaml` | Compose service configs |
+
+Agent `local_api_listen` defaults to `127.0.0.1:9100`. Set empty to disable. Use distinct ports when multiple agents share a host (viewer example uses `127.0.0.1:9101`).
+
+## API reference
+
+See [docs/api.md](docs/api.md) for hub control endpoints and agent local HTTP endpoints (methods, auth, fields).
+
+## CI
+
+GitHub Actions workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pull requests and pushes to `main`: `go vet`, `go build ./...`, `go test ./...`, and `go test -tags=integration ./test/integration/...` (Go 1.23.1).
 
 ## Layout
 
 ```
 cmd/hub|agent|relay
-internal/hub          thin NAT bridge: registry, allowlist, ACL netmap, punch/tickets
-internal/agent        hub client, local identity, path manager, WG
-internal/agent/identity  local agent_id persist
-internal/relay        UDP + WS forwarders
-configs/              hub, center, edge examples
-test/integration/     integration tests (build tag integration)
+internal/hub                 registry, allowlist, ACL netmap, HTTP + control WS
+internal/agent               hub client, identity, path manager, WG backends
+internal/agent/localapi      loopback /local/* HTTP API
+internal/relay               UDP + WebSocket forwarders
+configs/                     example YAML
+configs/compose/             Compose service configs
+docs/api.md                  HTTP API reference
+Dockerfile.hub|agent|relay   per-binary images
+docker-compose.yml           hub, relay, optional agents profile
+.github/workflows/ci.yml     vet, build, unit + integration tests
+test/integration/            integration tests (build tag integration)
 ```
 
 ## Tests
@@ -99,11 +171,7 @@ go test ./...
 go test -tags=integration ./test/integration/...
 ```
 
-## Remaining gaps
-
-- Center process does not yet host a full policy UI (config-file edge tokens + allowlist sync for MVP)
-- Grant TTL / durable persistence
-- Optional hub WG for ops only (explicitly non-default)
+Unit tests are colocated with packages. Integration tests live under `test/integration/` and require `-tags=integration`.
 
 ## License
 

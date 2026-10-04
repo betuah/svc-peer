@@ -12,6 +12,9 @@ func TestDefaultConfigKernelFirstAuto(t *testing.T) {
 	if cfg.WGBackend != "auto" {
 		t.Fatalf("default wg_backend=%q want auto (kernel-first)", cfg.WGBackend)
 	}
+	if cfg.LocalAPIListen != "127.0.0.1:9100" {
+		t.Fatalf("default local_api_listen=%q want 127.0.0.1:9100", cfg.LocalAPIListen)
+	}
 }
 
 func TestLoadConfigRejectsUnknownBackend(t *testing.T) {
