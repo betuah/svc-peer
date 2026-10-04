@@ -67,12 +67,13 @@ func (m *Manager) ApplyNetmap(ctx context.Context, revision uint64, peers []prot
 	m.mu.Lock()
 	m.peers = make(map[string]protocol.PeerConfig, len(peers))
 	for _, p := range peers {
-		m.peers[p.AgentID] = p
-		if _, ok := m.path[p.AgentID]; !ok {
-			m.path[p.AgentID] = protocol.PathDirect
+		id := peerKey(p)
+		m.peers[id] = p
+		if _, ok := m.path[id]; !ok {
+			m.path[id] = protocol.PathDirect
 		}
-		if _, watched := m.watching[p.AgentID]; !watched {
-			m.watching[p.AgentID] = struct{}{}
+		if _, watched := m.watching[id]; !watched {
+			m.watching[id] = struct{}{}
 			toWatch = append(toWatch, p)
 		}
 	}
@@ -164,7 +165,19 @@ func (m *Manager) HandleRelayTicket(ctx context.Context, peerID, ticket string, 
 	m.log.Info("relay path active", "peer", peerID, "shim", local)
 }
 
+func peerKey(p protocol.PeerConfig) string {
+	if p.PeerID != "" {
+		return p.PeerID
+	}
+	return p.AgentID
+}
+
 func (m *Manager) watchPeer(ctx context.Context, peer protocol.PeerConfig) {
+	id := peerKey(peer)
+	// Hub path uses keepalive/direct only — no A2A relay ticket.
+	if id == "hub" {
+		return
+	}
 	// Give direct / punch a chance, then request relay if no handshake.
 	timer := time.NewTimer(m.directWait)
 	defer timer.Stop()
@@ -175,19 +188,19 @@ func (m *Manager) watchPeer(ctx context.Context, peer protocol.PeerConfig) {
 	}
 	hs, ok, err := m.device.PeerLastHandshake(peer.PublicKey)
 	if err == nil && ok && time.Since(hs) < 2*m.directWait {
-		m.setPath(peer.AgentID, protocol.PathDirect)
+		m.setPath(id, protocol.PathDirect)
 		return
 	}
 	m.mu.Lock()
-	cur := m.path[peer.AgentID]
+	cur := m.path[id]
 	m.mu.Unlock()
 	if cur == protocol.PathRelay {
 		return
 	}
-	m.log.Info("direct path not established; requesting relay", "peer", peer.AgentID)
+	m.log.Info("direct path not established; requesting relay", "peer", id)
 	_ = m.ctrl.Send(protocol.Envelope{
 		Type:   protocol.TypeRelayRequest,
-		PeerID: peer.AgentID,
+		PeerID: id,
 	})
 }
 

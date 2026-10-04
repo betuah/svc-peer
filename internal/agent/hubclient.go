@@ -103,7 +103,7 @@ type Handlers struct {
 }
 
 // RunControlWS connects to the control channel, sends heartbeats, and dispatches messages.
-func (c *HubClient) RunControlWS(ctx context.Context, agentID string, heartbeat time.Duration, h Handlers) error {
+func (c *HubClient) RunControlWS(ctx context.Context, agentID, hubID string, heartbeat time.Duration, h Handlers) error {
 	u, err := url.Parse(c.baseURL)
 	if err != nil {
 		return err
@@ -135,6 +135,7 @@ func (c *HubClient) RunControlWS(ctx context.Context, agentID string, heartbeat 
 	if err := conn.WriteJSON(protocol.Envelope{
 		Type:    protocol.TypeHello,
 		AgentID: agentID,
+		HubID:   hubID,
 		Token:   c.token,
 	}); err != nil {
 		return err

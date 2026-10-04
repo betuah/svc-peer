@@ -28,6 +28,7 @@ type Agent struct {
 	relay   *relayclient.Client
 	paths   *pathmgr.Manager
 	agentID string
+	hubID   string
 	pubKey  string
 	privKey string
 	stun    []string
@@ -72,6 +73,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		return fmt.Errorf("register: %w", err)
 	}
 	a.agentID = reg.AgentID
+	a.hubID = reg.HubID
 	a.stun = reg.STUNURLs
 	a.relays = reg.RelayURLs
 	a.dns.Update(reg.DNSMap)
@@ -83,6 +85,7 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	a.log.Info("registered",
 		"agent_id", reg.AgentID,
+		"hub_id", reg.HubID,
 		"overlay_ip", reg.OverlayIP,
 		"dns_name", reg.DNSName,
 		"peers", len(reg.Peers),
@@ -108,7 +111,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	hb := time.Duration(a.cfg.HeartbeatSec) * time.Second
 	wsErr := make(chan error, 1)
 	go func() {
-		wsErr <- a.client.RunControlWS(ctx, a.agentID, hb, Handlers{
+		wsErr <- a.client.RunControlWS(ctx, a.agentID, a.hubID, hb, Handlers{
 			OnNetmap: func(env protocol.Envelope) {
 				a.dns.Update(env.DNSMap)
 				if err := a.paths.ApplyNetmap(ctx, env.Revision, env.Peers); err != nil {
