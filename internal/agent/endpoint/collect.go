@@ -1,4 +1,4 @@
-// Package endpoint discovers host and STUN reflexive UDP candidates.
+// Package endpoint discovers host-local (incl. private underlay) and STUN reflexive UDP candidates.
 package endpoint
 
 import (
@@ -14,6 +14,7 @@ import (
 )
 
 // Collect returns local host UDP endpoints for listenPort plus STUN srflx when possible.
+// Results are ranked: private/underlay host → other host → STUN reflexive.
 func Collect(ctx context.Context, listenPort int, stunURLs []string) ([]protocol.Endpoint, error) {
 	var out []protocol.Endpoint
 	hosts, err := hostIPs()
@@ -25,7 +26,7 @@ func Collect(ctx context.Context, listenPort int, stunURLs []string) ([]protocol
 			IP:    ip,
 			Port:  listenPort,
 			Proto: "udp",
-			Src:   "host",
+			Src:   protocol.EndpointSrcHost,
 		})
 	}
 	for _, raw := range stunURLs {
@@ -36,7 +37,7 @@ func Collect(ctx context.Context, listenPort int, stunURLs []string) ([]protocol
 		out = append(out, srflx)
 		break // one working STUN server is enough
 	}
-	return out, nil
+	return protocol.RankEndpoints(out), nil
 }
 
 func hostIPs() ([]string, error) {
@@ -45,6 +46,7 @@ func hostIPs() ([]string, error) {
 		return nil, err
 	}
 	var ips []string
+	seen := make(map[string]struct{})
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
 			continue
@@ -61,12 +63,20 @@ func hostIPs() ([]string, error) {
 			case *net.IPAddr:
 				ip = v.IP
 			}
-			if ip == nil || ip.IsLoopback() {
+			if ip == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() {
 				continue
 			}
-			if v4 := ip.To4(); v4 != nil {
-				ips = append(ips, v4.String())
+			// IPv4 only for WG UDP candidates in MVP (matches prior behavior).
+			v4 := ip.To4()
+			if v4 == nil {
+				continue
 			}
+			s := v4.String()
+			if _, ok := seen[s]; ok {
+				continue
+			}
+			seen[s] = struct{}{}
+			ips = append(ips, s)
 		}
 	}
 	return ips, nil
@@ -119,7 +129,7 @@ func stunReflexive(ctx context.Context, stunURL string, localPort int) (protocol
 		IP:    xor.IP.String(),
 		Port:  port,
 		Proto: "udp",
-		Src:   "srflx",
+		Src:   protocol.EndpointSrcSrflx,
 	}, nil
 }
 

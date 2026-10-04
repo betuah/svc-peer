@@ -218,7 +218,8 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 }
 
-// ReportEndpoints discovers host/STUN candidates and sends endpoint_report.
+// ReportEndpoints discovers host-local (private underlay + other) and STUN
+// candidates, ranked for underlay-first path selection, and sends endpoint_report.
 func (a *Agent) ReportEndpoints(ctx context.Context) error {
 	eps, err := endpoint.Collect(ctx, a.cfg.WGListenPort, a.stun)
 	if err != nil {
@@ -227,7 +228,13 @@ func (a *Agent) ReportEndpoints(ctx context.Context) error {
 	if len(eps) == 0 {
 		return fmt.Errorf("no endpoints discovered")
 	}
-	a.log.Info("reporting endpoints", "count", len(eps))
+	private := 0
+	for _, ep := range eps {
+		if ep.Src == protocol.EndpointSrcHost && protocol.IsUnderlayPrivate(ep.IP) {
+			private++
+		}
+	}
+	a.log.Info("reporting endpoints", "count", len(eps), "private_host", private)
 	return a.client.Send(protocol.Envelope{
 		Type:      protocol.TypeEndpointReport,
 		Endpoints: eps,
