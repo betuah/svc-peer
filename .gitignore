@@ -5,3 +5,6 @@
 *.out
 .DS_Store
 /configs/*.local.yaml
+
+# Local/dev TLS material from `make certs` (keep certs/.gitkeep).
+/certs/*.pem
