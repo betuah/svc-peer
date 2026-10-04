@@ -9,7 +9,7 @@ The center agent (`role=center`) is the network authority for join tokens, allow
 | Doc | Purpose |
 |-----|---------|
 | [docs/architecture.md](docs/architecture.md) | Architecture: binaries, center/edge, hub cloud vs self-host, ACL, NAT/relay, identity |
-| [docs/deploy.md](docs/deploy.md) | Deploy: vendor cloud, self-host, TLS, Compose, `CAP_NET_ADMIN` |
+| [docs/deploy.md](docs/deploy.md) | Deploy: vendor cloud, self-host, TLS, Compose, GHCR release images, `CAP_NET_ADMIN` |
 | [docs/api.md](docs/api.md) | Hub control APIs and agent local HTTP (including center `/local/allowlist`) |
 | [docs/README.md](docs/README.md) | Docs index |
 
@@ -106,6 +106,7 @@ Makefile                     common build/test/compose/cert targets
 Dockerfile.hub|agent|relay   per-binary images
 docker-compose.yml           hub, relay, optional agents profile
 .github/workflows/ci.yml     vet, build, unit + integration tests
+.github/workflows/release-images.yml  GHCR push on v* tags
 test/integration/            integration tests (build tag integration)
 ```
 
@@ -117,7 +118,7 @@ make test-integration
 # or: go test ./... && go test -tags=integration ./test/integration/...
 ```
 
-CI: [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `go vet`, `go build ./...`, `go test ./...`, and integration tests on PRs and `main`.
+CI: [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `go vet`, `go build ./...`, `go test ./...`, and integration tests on PRs and `main`. Tag pushes matching `v*` run [`.github/workflows/release-images.yml`](.github/workflows/release-images.yml) to build and push `ghcr.io/betuah/svc-peer-{hub,agent,relay}` (see [docs/deploy.md](docs/deploy.md)).
 
 ## License
 
