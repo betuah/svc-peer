@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -39,6 +40,7 @@ type Hub struct {
 	grants *GrantStore
 	netmap *NetmapBuilder
 	api    *API
+	store  *FileStore
 
 	mu    sync.RWMutex
 	conns map[string]*Conn
@@ -70,6 +72,38 @@ func New(cfg Config, log *slog.Logger) (*Hub, error) {
 		log.Info("seeded management token (break-glass)", "hub_id", cfg.HubID)
 	}
 
+	store := NewFileStore(cfg.StatePath)
+	if store != nil {
+		st, err := store.Load()
+		if err != nil {
+			return nil, err
+		}
+		if st != nil {
+			if st.HubID != "" && st.HubID != cfg.HubID {
+				return nil, fmt.Errorf("hub state hub_id %q does not match config hub_id %q", st.HubID, cfg.HubID)
+			}
+			agents, err := agentsFromPersisted(st.Agents)
+			if err != nil {
+				return nil, err
+			}
+			if err := reg.RestoreAgents(agents); err != nil {
+				return nil, fmt.Errorf("restore agents: %w", err)
+			}
+			edgeRecs := tokensFromPersisted(st.EdgeTokens)
+			if err := tokens.RestoreEdge(edgeRecs); err != nil {
+				return nil, fmt.Errorf("restore edge allowlist: %w", err)
+			}
+			log.Info("loaded durable hub state",
+				"path", store.Path(),
+				"agents", len(agents),
+				"edge_tokens", len(edgeRecs),
+				"center_agent_id", reg.CenterAgentID(),
+			)
+		} else {
+			log.Info("durable hub state enabled (empty)", "path", store.Path())
+		}
+	}
+
 	grants := NewGrantStore()
 	h := &Hub{
 		cfg:    cfg,
@@ -78,6 +112,7 @@ func New(cfg Config, log *slog.Logger) (*Hub, error) {
 		reg:    reg,
 		grants: grants,
 		netmap: NewNetmapBuilder(reg, grants),
+		store:  store,
 		conns:  make(map[string]*Conn),
 	}
 	h.api = &API{
@@ -90,6 +125,106 @@ func New(cfg Config, log *slog.Logger) (*Hub, error) {
 		hub:    h,
 	}
 	return h, nil
+}
+
+// Persist writes allowlist cache + registered agents to StatePath (no-op if unset).
+func (h *Hub) Persist() error {
+	if h.store == nil {
+		return nil
+	}
+	agents := h.reg.SnapshotAgents()
+	pa := make([]persistedAgent, 0, len(agents))
+	for _, a := range agents {
+		pa = append(pa, persistedAgent{
+			ID:           a.ID,
+			HubID:        a.HubID,
+			Role:         a.Role,
+			Name:         a.Name,
+			PublicKey:    a.PublicKey,
+			OverlayIP:    a.OverlayIP.String(),
+			DNSName:      a.DNSName,
+			Tags:         append([]string(nil), a.Tags...),
+			Capabilities: append([]string(nil), a.Capabilities...),
+			Platform:     a.Platform,
+			WGBackend:    a.WGBackend,
+			TokenID:      a.TokenID,
+		})
+	}
+	edge := h.tokens.SnapshotEdge()
+	pt := make([]persistedToken, 0, len(edge))
+	for _, rec := range edge {
+		pt = append(pt, persistedToken{
+			ID:        rec.ID,
+			HubID:     rec.HubID,
+			Role:      rec.Role,
+			Label:     rec.Label,
+			Tags:      append([]string(nil), rec.Tags...),
+			Hash:      rec.Hash,
+			AgentID:   rec.AgentID,
+			Revoked:   rec.Revoked,
+			CreatedAt: rec.CreatedAt,
+		})
+	}
+	return h.store.Save(&stateFile{
+		HubID:      h.cfg.HubID,
+		Agents:     pa,
+		EdgeTokens: pt,
+	})
+}
+
+// persistOrLog saves durable state; logs failures without failing the request path.
+func (h *Hub) persistOrLog() {
+	if err := h.Persist(); err != nil {
+		h.log.Error("persist hub state failed", "err", err, "path", h.store.Path())
+	}
+}
+
+func agentsFromPersisted(in []persistedAgent) ([]Agent, error) {
+	out := make([]Agent, 0, len(in))
+	for _, p := range in {
+		prefix, err := netip.ParsePrefix(p.OverlayIP)
+		if err != nil {
+			// Accept bare IP as /32.
+			addr, aerr := netip.ParseAddr(p.OverlayIP)
+			if aerr != nil {
+				return nil, fmt.Errorf("agent %s overlay_ip: %w", p.ID, err)
+			}
+			prefix = netip.PrefixFrom(addr, 32)
+		}
+		out = append(out, Agent{
+			ID:           p.ID,
+			HubID:        p.HubID,
+			Role:         p.Role,
+			Name:         p.Name,
+			PublicKey:    p.PublicKey,
+			OverlayIP:    prefix,
+			DNSName:      p.DNSName,
+			Tags:         append([]string(nil), p.Tags...),
+			Capabilities: append([]string(nil), p.Capabilities...),
+			Platform:     p.Platform,
+			WGBackend:    p.WGBackend,
+			TokenID:      p.TokenID,
+		})
+	}
+	return out, nil
+}
+
+func tokensFromPersisted(in []persistedToken) []TokenRecord {
+	out := make([]TokenRecord, 0, len(in))
+	for _, p := range in {
+		out = append(out, TokenRecord{
+			ID:        p.ID,
+			HubID:     p.HubID,
+			Role:      p.Role,
+			Label:     p.Label,
+			Tags:      append([]string(nil), p.Tags...),
+			Hash:      p.Hash,
+			AgentID:   p.AgentID,
+			Revoked:   p.Revoked,
+			CreatedAt: p.CreatedAt,
+		})
+	}
+	return out
 }
 
 // API returns the HTTP API for router mounting.

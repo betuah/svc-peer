@@ -34,6 +34,17 @@ The center agent (`role=center`) is the network authority for join tokens, allow
 3. Start edge agents with join tokens from the center (`role: edge`). Each persists its own `agent_id`. Netmap peers are center-only.
 4. Direct WireGuard edge↔center; STUN/punch/relay when NAT blocks UDP.
 
+## Hub durable state
+
+Set `state_path` in the hub config (see `configs/hub.example.yaml`; Compose uses `/var/lib/svc-peer/hub-state.json`). The hub stores a JSON snapshot of the edge allowlist cache and registered agents so membership survives process restarts.
+
+| Persisted | Not persisted |
+|-----------|---------------|
+| Edge allowlist (id, hash, label, tags, agent binding, revoked) | Online / offline presence |
+| Agents (`agent_id`, role, name, WG pubkey, overlay IP, DNS name, token id, tags) | Heartbeat / last-seen / endpoints |
+
+After restart, agents are offline until they register or heartbeat again; overlay IPs and token bindings are kept. Center remains the source of truth for edge tokens and re-syncs with `PUT /hub/allowlist` on connect. The hub file is a cache for NAT’d enrollment, not mint UX.
+
 ## Build
 
 Requires Go 1.23.1 (see `go.mod`).
@@ -130,7 +141,7 @@ Replace the example secrets in `configs/compose/*.yaml` before any shared or pro
 
 | File | Process |
 |------|---------|
-| `configs/hub.example.yaml` | Hub (`center_bootstrap`, overlay CIDR, STUN/relay URLs) |
+| `configs/hub.example.yaml` | Hub (`center_bootstrap`, overlay CIDR, `state_path`, STUN/relay URLs) |
 | `configs/agent-center.example.yaml` | Center agent (`center_bootstrap`, `edge_tokens`, `local_api_listen`) |
 | `configs/agent.example.yaml` | Edge agent (join token, `local_api_listen`) |
 | `configs/agent-viewer.example.yaml` | Second edge example (different WG interface / local API port) |

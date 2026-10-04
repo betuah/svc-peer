@@ -267,6 +267,64 @@ func (s *TokenStore) Get(id string) (*TokenRecord, error) {
 	return &cp, nil
 }
 
+// SnapshotEdge returns copies of edge join-token records for durable cache.
+// Management tokens are config-seeded and not included.
+func (s *TokenStore) SnapshotEdge() []TokenRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]TokenRecord, 0, len(s.byID))
+	for _, rec := range s.byID {
+		if rec.Role != RoleEdgeToken {
+			continue
+		}
+		cp := *rec
+		cp.Tags = append([]string(nil), rec.Tags...)
+		out = append(out, cp)
+	}
+	return out
+}
+
+// RestoreEdge loads edge join tokens from durable storage (hashes only; no plaintext).
+// Skips records that collide with an already-seeded id/hash (e.g. management seed).
+func (s *TokenStore) RestoreEdge(recs []TokenRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, in := range recs {
+		if in.ID == "" || in.Hash == "" {
+			return fmt.Errorf("restore edge token: id and hash required")
+		}
+		if in.Role != "" && in.Role != RoleEdgeToken {
+			return fmt.Errorf("restore edge token %q: unexpected role %q", in.ID, in.Role)
+		}
+		if existing, ok := s.byID[in.ID]; ok {
+			if existing.Role != RoleEdgeToken {
+				continue // keep config-seeded management token
+			}
+			return fmt.Errorf("restore edge token: duplicate id %q", in.ID)
+		}
+		if _, exists := s.byHash[in.Hash]; exists {
+			return fmt.Errorf("restore edge token: hash collision for id %q", in.ID)
+		}
+		rec := &TokenRecord{
+			ID:        in.ID,
+			HubID:     s.hubID,
+			Role:      RoleEdgeToken,
+			Label:     in.Label,
+			Tags:      append([]string(nil), in.Tags...),
+			Hash:      in.Hash,
+			AgentID:   in.AgentID,
+			Revoked:   in.Revoked,
+			CreatedAt: in.CreatedAt,
+		}
+		if rec.CreatedAt.IsZero() {
+			rec.CreatedAt = time.Now().UTC()
+		}
+		s.byID[rec.ID] = rec
+		s.byHash[rec.Hash] = rec
+	}
+	return nil
+}
+
 func hashToken(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
