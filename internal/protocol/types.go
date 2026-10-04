@@ -21,12 +21,14 @@ type PeerConfig struct {
 	PersistentKeepalive int      `json:"persistent_keepalive,omitempty"`
 }
 
-// Endpoint describes a reported UDP candidate (host or STUN reflexive).
+// Endpoint describes a reported UDP candidate (host-local or STUN reflexive).
+// Agents report private/underlay host addresses and optional public host/srflx.
+// Path selection prefers underlay/private host, then other host, then srflx.
 type Endpoint struct {
 	IP    string `json:"ip"`
 	Port  int    `json:"port"`
 	Proto string `json:"proto"` // "udp"
-	Src   string `json:"src"`   // "host" | "srflx"
+	Src   string `json:"src"`   // EndpointSrcHost | EndpointSrcSrflx
 }
 
 // AgentSummary is returned by GET /agents.
