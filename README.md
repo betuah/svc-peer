@@ -1,83 +1,58 @@
 # svc-peer
 
-WireGuard control-plane hub + agent + owned relay for low-latency peer data (e.g. CCTV).
+WireGuard overlay: **one center** (business authority + main app) + many **edge** agents per `hub_id`. Happy-path app data is **direct WG edge↔center**. Cloud hub is a **NAT bridge** (STUN + relay + thin signaling) — not the app dataplane next-hop, not day-to-day token mint.
 
-Greenfield Go (`github.com/betuah/svc-peer`). Inspired by Tailscale / Headscale / Netbird patterns — not a fork or vendor of those products.
+Greenfield Go (`github.com/betuah/svc-peer`). Inspired by Tailscale / Headscale / Netbird patterns — not a fork.
 
-## Architecture (locked MVP)
+## Roles & ACL
 
-| Plane | Role |
-|-------|------|
-| **Hub** | REST + WebSocket: management/agent tokens, register, ACL netmap, heartbeat, punch coordination, relay tickets |
-| **Agent** | Kernel WireGuard preferred (`wgctrl`); **wireguard-go** fallback; STUN + hole punch; relay shim; MagicDNS from netmap |
-| **Relay** | First-party fallback: opaque WG packet forward over **UDP** and **WS** (HMAC tickets) |
+| Role | Cardinality | Dataplane peers |
+|------|-------------|-----------------|
+| **center** | Exactly one per `hub_id` | All edges |
+| **edge** | Many | **Center only** (direct WG) |
+| edge↔edge | — | **Deny** (no peer, no hairpin) |
+| hub | NAT bridge | **Not** app next-hop |
 
-- **Multi-hub isolation:** each hub process has a `hub_id`; tokens/agents/netmaps are scoped to that hub; no cross-hub overlay.
-- **Default ACL (hub-spoke):** Agent→Hub allow; Hub→agents allow; Agent→Agent **drop** (no peer, **no hairpin**).
-- **A2A grant:** management token adds **direct WG** peers A↔B; hub is not in that media path.
-- **Agent ID** is created on **first successful register**; reconnect restores the same identity.
-- Auth is fully **token-based**: management token vs agent token (no separate `hub_secret` auth).
-- Overlay CIDR is configurable; no WebRTC primary path; no custom streaming stack on WG.
+## Join flow (as implemented)
+
+1. Start thin hub (+ relay) with `hub_id` + shared `center_bootstrap`.
+2. Start **center** agent with the same `center_bootstrap` and `role: center`.
+   - Generates/persists local `agent_id` under `state_dir`
+   - Registers with bootstrap → claims sole center
+   - Syncs `edge_tokens` to hub via `PUT /hub/allowlist`
+3. Start **edge** agents with join tokens from center (`role: edge`).
+   - Each generates/persists its own local `agent_id`
+   - Registers with join token; hub rejects `agent_id` collisions
+   - Netmap peers = **[center]** only
+4. Direct WG edge↔center; STUN/punch/relay assist when NAT blocks UDP.
 
 ## Auth & API
 
-All protected routes use `Authorization: Bearer <token>`.
+`Authorization: Bearer <credential>`
 
-| Token | Capabilities |
-|-------|----------------|
-| **Management** | Mint/revoke/rotate agent tokens; grant/revoke A2A; list grants. Bootstrap via `management_token_seed` in hub config. |
-| **Agent** | Register, heartbeat, `GET /agents`, `GET /netmap`, control WS. **Cannot** mint tokens or grant peers. |
+| Credential | Use |
+|------------|-----|
+| **`center_bootstrap`** | Center first register + allowlist sync + center session |
+| **Edge join token** | Edge register / heartbeat / netmap (created on center, synced to hub) |
+| **Management token** | Break-glass revoke/mint/ops only — not primary onboarding |
 
-### Management (hub ops)
-
-```bash
-# Mint agent token
-curl -s -X POST http://127.0.0.1:8080/hub/tokens \
-  -H "Authorization: Bearer change-me-management-token" \
-  -H "Content-Type: application/json" \
-  -d '{"label":"cam-02","tags":["camera"]}'
-
-# Revoke / rotate
-curl -s -X DELETE http://127.0.0.1:8080/hub/tokens/{id} \
-  -H "Authorization: Bearer change-me-management-token"
-curl -s -X POST http://127.0.0.1:8080/hub/tokens/{id}/rotate \
-  -H "Authorization: Bearer change-me-management-token"
-
-# Grant / revoke / list A2A (direct WG peers)
-curl -s -X POST http://127.0.0.1:8080/hub/grants \
-  -H "Authorization: Bearer change-me-management-token" \
-  -H "Content-Type: application/json" \
-  -d '{"agent_a_id":"<uuid>","agent_b_id":"<uuid>"}'
-curl -s http://127.0.0.1:8080/hub/grants \
-  -H "Authorization: Bearer change-me-management-token"
-curl -s -X DELETE http://127.0.0.1:8080/hub/grants/{grant_id} \
-  -H "Authorization: Bearer change-me-management-token"
-```
-
-### Agent-facing (`/api/v1`)
-
-| Method | Path | Auth | Notes |
-|--------|------|------|-------|
-| POST | `/api/v1/agents/register` | agent | Returns `hub_id`, overlay IP, ACL-derived `peers` (default: hub only) |
-| GET | `/api/v1/agents` | agent | Hub-scoped discovery + `online` status |
-| GET | `/api/v1/agents/{id}` | agent | Detail on this hub |
-| GET | `/api/v1/netmap` | agent | ACL-derived peers + MagicDNS map |
-| GET | `/health` | none | Includes `hub_id` |
-| WS | `/ws/v1/agent` | agent (hello) | Heartbeat, endpoint report, netmap push, punch, relay tickets |
-
-`relay_secret` in hub/relay config is **only** for HMAC relay tickets — not an auth credential.
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| PUT | `/hub/allowlist` | center_bootstrap | Sync edge join tokens from center |
+| POST | `/hub/tokens` | management | Break-glass mint |
+| DELETE | `/hub/tokens/{id}` | center or management | Revoke |
+| POST | `/api/v1/agents/register` | bootstrap or join token | Present local `agent_id` + role |
+| GET | `/api/v1/agents` | center/edge session | Discovery + online + role |
+| GET | `/api/v1/netmap` | center/edge session | ACL peers (edge↔center) |
+| GET | `/health` | none | Includes `hub_id`, `center_agent_id` |
 
 ## Privileges
 
-Creating a WireGuard / TUN interface requires **CAP_NET_ADMIN** (Linux) or equivalent admin rights:
+Creating a WireGuard / TUN interface needs **CAP_NET_ADMIN** (or run as root).
 
 ```bash
 sudo setcap cap_net_admin,cap_net_raw+ep ./bin/agent
-# or
-sudo ./bin/agent -config configs/agent.example.yaml
 ```
-
-Kernel backend also needs the `wireguard` kernel module. If unavailable, the agent falls back to userspace (`wireguard-go`).
 
 ## Build
 
@@ -88,28 +63,17 @@ go build -o bin/agent ./cmd/agent
 go build -o bin/relay ./cmd/relay
 ```
 
-## Smoke-test two agents
-
-1. Start hub + relay:
+## Smoke-test
 
 ```bash
 go run ./cmd/hub -config configs/hub.example.yaml
 go run ./cmd/relay -config configs/relay.example.yaml
+sudo go run ./cmd/agent -config configs/agent-center.example.yaml
+sudo go run ./cmd/agent -config configs/agent.example.yaml
+sudo go run ./cmd/agent -config configs/agent-viewer.example.yaml
 ```
 
-2. Start camera + viewer agents (needs CAP_NET_ADMIN), using pre-seeded agent tokens from hub config.
-
-3. Default: each agent netmap peers **hub only**. To enable direct A2A:
-
-```bash
-# after both agents registered, grant with management token
-curl -s -X POST http://127.0.0.1:8080/hub/grants \
-  -H "Authorization: Bearer change-me-management-token" \
-  -H "Content-Type: application/json" \
-  -d '{"agent_a_id":"<cam>","agent_b_id":"<viewer>"}'
-```
-
-4. List agents (online/offline):
+List agents (edge token or center bootstrap):
 
 ```bash
 curl -s -H "Authorization: Bearer spt_dev_cam_warehouse_01_replace_me" \
@@ -120,45 +84,26 @@ curl -s -H "Authorization: Bearer spt_dev_cam_warehouse_01_replace_me" \
 
 ```
 cmd/hub|agent|relay
-internal/hub          tokens (mgmt/agent), ACL grants, registry/IPAM, REST, control WS
-internal/agent        hub client, path manager, STUN, punch, relay client
-internal/agent/wgdev  kernel (linux) + userspace wireguard-go
-internal/relay        UDP + WS forwarders (ticket auth)
-internal/ticket       HMAC relay tickets (shared hub/relay secret)
-internal/protocol     shared message types
-configs/              example YAML
+internal/hub          thin NAT bridge: registry, allowlist, ACL netmap, punch/tickets
+internal/agent        hub client, local identity, path manager, WG
+internal/agent/identity  local agent_id persist
+internal/relay        UDP + WS forwarders
+configs/              hub, center, edge examples
 test/integration/     integration tests (build tag integration)
 ```
 
-## What works vs remaining stubs
-
-**Working**
-
-- Multi-hub isolation via `hub_id`-scoped tokens/agents/netmaps
-- Management vs agent token roles; bootstrap `management_token_seed`
-- Default hub-spoke ACL netmap; A2A grants → direct WG peers; no hairpin
-- Real WG keygen; kernel (`wgctrl`+netlink) and userspace (`wireguard-go`) devices
-- STUN srflx + host candidates; punch for **granted** peers; ticketed relay
-- MagicDNS map from netmap (resolution ≠ dataplane permission)
-
-**Still stub / deferred**
-
-- Hub process running its own WG dataplane device (agents already get hub peer in netmap)
-- Full CCTV streaming profiles (SRT/RTSP over tunnel)
-- Durable persistence (SQLite/Postgres), TLS everywhere
-- Grant TTL/sessions; multi-tenant many hubs in one process
-
 ## Tests
 
-Unit tests live next to packages; integration/smoke tests live under `test/integration/` (build tag). Details: [test/README.md](./test/README.md).
-
 ```bash
-# Unit only (default)
 go test ./...
-
-# Integration / control-plane smoke
 go test -tags=integration ./test/integration/...
 ```
+
+## Remaining gaps
+
+- Center process does not yet host a full policy UI (config-file edge tokens + allowlist sync for MVP)
+- Grant TTL / durable persistence
+- Optional hub WG for ops only (explicitly non-default)
 
 ## License
 
