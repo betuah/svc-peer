@@ -1,0 +1,15 @@
+.git
+.github
+bin
+**/state
+**/*.test
+**/*.out
+.DS_Store
+*.md
+!README.md
+docs
+test
+**/*_test.go
+.gitignore
+docker-compose*.yml
+.env*

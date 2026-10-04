@@ -1,0 +1,76 @@
+services:
+  hub:
+    image: svc-peer-hub:local
+    build:
+      context: .
+      dockerfile: Dockerfile.hub
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./configs/compose/hub.yaml:/etc/svc-peer/config.yaml:ro
+    restart: unless-stopped
+
+  relay:
+    image: svc-peer-relay:local
+    build:
+      context: .
+      dockerfile: Dockerfile.relay
+    depends_on:
+      - hub
+    ports:
+      - "3478:3478/udp"
+      - "3479:3479"
+    volumes:
+      - ./configs/compose/relay.yaml:/etc/svc-peer/config.yaml:ro
+    restart: unless-stopped
+
+  # WireGuard agents need NET_ADMIN + /dev/net/tun on the host.
+  # Start with: docker compose --profile agents up -d --build
+  agent-center:
+    profiles: ["agents"]
+    image: svc-peer-agent:local
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    depends_on:
+      - hub
+      - relay
+    ports:
+      - "51820:51820/udp"
+      - "9100:9100"
+    volumes:
+      - ./configs/compose/agent-center.yaml:/etc/svc-peer/config.yaml:ro
+      - center-state:/var/lib/svc-peer/center
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+
+  agent-edge:
+    profiles: ["agents"]
+    image: svc-peer-agent:local
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    depends_on:
+      - hub
+      - relay
+      - agent-center
+    ports:
+      - "51821:51820/udp"
+      - "9101:9100"
+    volumes:
+      - ./configs/compose/agent-edge.yaml:/etc/svc-peer/config.yaml:ro
+      - edge-state:/var/lib/svc-peer/edge
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+
+volumes:
+  center-state:
+  edge-state:

@@ -1,0 +1,15 @@
+# svc-peer-agent
+# Runtime needs CAP_NET_ADMIN and /dev/net/tun for WireGuard (see README / compose).
+FROM golang:1.23.1-bookworm AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/agent ./cmd/agent
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates
+COPY --from=build /out/agent /usr/local/bin/agent
+EXPOSE 51820/udp 9100
+ENTRYPOINT ["/usr/local/bin/agent"]
+CMD ["-config", "/etc/svc-peer/config.yaml"]

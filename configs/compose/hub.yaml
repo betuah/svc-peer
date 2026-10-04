@@ -1,0 +1,14 @@
+# Compose hub (NAT bridge). Secrets here are for local smoke only.
+listen_addr: ":8080"
+hub_id: "hub-main"
+center_bootstrap: "change-me-center-bootstrap"
+management_token_seed: "change-me-management-token"
+relay_secret: "change-me-relay-secret"
+overlay_cidr: "10.10.0.0/16"
+dns_suffix: "peer.local"
+stun_urls:
+  - "stun:stun.l.google.com:19302"
+relay_urls:
+  - "udp://relay:3478"
+  - "ws://relay:3479/relay"
+heartbeat_timeout_sec: 45
