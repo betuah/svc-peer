@@ -1,10 +1,14 @@
-# svc-peer agent example (camera)
+# svc-peer edge agent (camera) — peers only the center (direct WG)
 hub_url: "http://127.0.0.1:8080"
+hub_id: "hub-main"
+role: "edge"
+# Join token created on center and synced to hub allowlist
 token: "spt_dev_cam_warehouse_01_replace_me"
 name: "cam-warehouse-01"
+state_dir: "./state/cam-warehouse-01"
 tags: ["warehouse", "camera"]
 capabilities: ["video/rtsp", "video/srt"]
-wg_backend: "auto" # auto = kernel WireGuard when available, else wireguard-go; or force kernel|userspace
+wg_backend: "auto"
 wg_interface: "sp0"
 wg_listen_port: 51820
 heartbeat_sec: 15

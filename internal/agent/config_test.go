@@ -17,7 +17,7 @@ func TestDefaultConfigKernelFirstAuto(t *testing.T) {
 func TestLoadConfigRejectsUnknownBackend(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agent.yaml")
-	content := []byte("hub_url: http://127.0.0.1:8080\ntoken: t\nname: n\nwg_backend: weird\n")
+	content := []byte("hub_url: http://127.0.0.1:8080\nstate_dir: ./s\ntoken: t\nname: n\nwg_backend: weird\n")
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestLoadConfigRejectsUnknownBackend(t *testing.T) {
 func TestLoadConfigNormalizesEmptyBackendToAuto(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agent.yaml")
-	content := []byte("hub_url: http://127.0.0.1:8080\ntoken: t\nname: n\nwg_backend: \"\"\n")
+	content := []byte("hub_url: http://127.0.0.1:8080\nstate_dir: ./s\ntoken: t\nname: n\nwg_backend: \"\"\n")
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -39,5 +39,17 @@ func TestLoadConfigNormalizesEmptyBackendToAuto(t *testing.T) {
 	}
 	if cfg.WGBackend != "auto" {
 		t.Fatalf("got %q", cfg.WGBackend)
+	}
+}
+
+func TestLoadConfigCenterRequiresBootstrap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.yaml")
+	content := []byte("hub_url: http://127.0.0.1:8080\nstate_dir: ./s\nrole: center\nname: center\n")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil {
+		t.Fatal("expected error without center_bootstrap")
 	}
 }

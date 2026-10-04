@@ -174,11 +174,7 @@ func peerKey(p protocol.PeerConfig) string {
 
 func (m *Manager) watchPeer(ctx context.Context, peer protocol.PeerConfig) {
 	id := peerKey(peer)
-	// Hub path uses keepalive/direct only — no A2A relay ticket.
-	if id == "hub" {
-		return
-	}
-	// Give direct / punch a chance, then request relay if no handshake.
+	// Give direct / punch a chance, then request relay if no handshake (edge↔center allowed).
 	timer := time.NewTimer(m.directWait)
 	defer timer.Stop()
 	select {
