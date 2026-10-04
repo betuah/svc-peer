@@ -32,7 +32,11 @@ The center agent (`role=center`) is the network authority for join tokens, allow
 1. Start hub (+ relay) with `hub_id` and shared `center_bootstrap`.
 2. Start the center agent with matching `center_bootstrap` and `role: center`. It generates a local `agent_id`, registers, claims the sole center slot, and syncs `edge_tokens` via `PUT /hub/allowlist`.
 3. Start edge agents with join tokens from the center (`role: edge`). Each persists its own `agent_id`. Netmap peers are center-only.
-4. Direct WireGuard edge↔center; STUN/punch/relay when NAT blocks UDP.
+4. Direct WireGuard edge↔center. Path selection order for an allowed peer:
+   **private/underlay host → STUN reflexive / hole punch → relay fallback**.
+   Agents advertise host-local addresses (including RFC1918 / CGNAT) plus STUN
+   candidates; the hub exchanges them for allowed pairs only (default edge↔center).
+   Hub is signaling only — not the application dataplane next-hop.
 
 ## Hub durable state
 

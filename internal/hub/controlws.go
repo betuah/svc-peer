@@ -360,7 +360,8 @@ func (h *Hub) authenticateWS(hello protocol.Envelope) (string, error) {
 	return rec.AgentID, nil
 }
 
-// coordinatePunch exchanges candidates only for allowed pairs (edge↔center or grants).
+// coordinatePunch exchanges ranked candidates only for allowed pairs (edge↔center or grants).
+// Candidates are ordered private/underlay host → other host → STUN reflexive.
 func (h *Hub) coordinatePunch(reporterID string) {
 	reporter, err := h.reg.Get(reporterID)
 	if err != nil || len(reporter.Endpoints) == 0 {
@@ -376,12 +377,12 @@ func (h *Hub) coordinatePunch(reporterID string) {
 		h.sendTo(reporterID, protocol.Envelope{
 			Type:       protocol.TypePunch,
 			PeerID:     other.ID,
-			Candidates: other.Endpoints,
+			Candidates: protocol.RankEndpoints(other.Endpoints),
 		})
 		h.sendTo(other.ID, protocol.Envelope{
 			Type:       protocol.TypePunch,
 			PeerID:     reporterID,
-			Candidates: reporter.Endpoints,
+			Candidates: protocol.RankEndpoints(reporter.Endpoints),
 		})
 	}
 }

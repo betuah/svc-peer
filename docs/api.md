@@ -252,7 +252,7 @@ Agent control channel (gorilla WebSocket). First message is `hello` with `agent_
 |-----------|--------|---------|
 | agent→hub | `hello` | Authenticate session |
 | agent→hub | `heartbeat` | Presence |
-| agent→hub | `endpoint_report` | Host/STUN candidates |
+| agent→hub | `endpoint_report` | Host-local (private underlay + other) and STUN `srflx` candidates, ranked underlay-first |
 | agent→hub | `path_status` | `direct` / `relay` for a peer |
 | agent→hub | `relay_request` | Request relay ticket |
 | hub→agent | `netmap` | Peer list + DNS map push |

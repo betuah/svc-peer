@@ -109,7 +109,9 @@ func (m *Manager) ApplyNetmap(ctx context.Context, revision uint64, peers []prot
 	return nil
 }
 
-// HandlePunch runs UDP probes and sets WG endpoint to the first candidate.
+// HandlePunch runs UDP probes and sets WG endpoint preferring underlay/private candidates.
+// Selection order matches Collect/netmap: private host → other host → STUN reflexive.
+// Relay fallback remains in watchPeer when no direct handshake establishes.
 func (m *Manager) HandlePunch(ctx context.Context, peerID string, candidates []protocol.Endpoint) {
 	m.mu.Lock()
 	peer, ok := m.peers[peerID]
@@ -117,8 +119,9 @@ func (m *Manager) HandlePunch(ctx context.Context, peerID string, candidates []p
 	if !ok || peer.PublicKey == "" {
 		return
 	}
-	punch.Probe(ctx, candidates)
-	for _, c := range candidates {
+	ranked := protocol.RankEndpoints(candidates)
+	punch.Probe(ctx, ranked)
+	for _, c := range ranked {
 		if c.IP == "" || c.Port == 0 {
 			continue
 		}

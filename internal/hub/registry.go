@@ -245,7 +245,7 @@ func (r *Registry) UpdateEndpoints(agentID string, endpoints []protocol.Endpoint
 	if !ok {
 		return ErrAgentNotFound
 	}
-	a.Endpoints = append([]protocol.Endpoint(nil), endpoints...)
+	a.Endpoints = protocol.RankEndpoints(endpoints)
 	a.LastSeen = time.Now().UTC()
 	a.Online = true
 	r.revision++
