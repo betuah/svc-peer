@@ -150,6 +150,13 @@ func (s *GrantStore) List() []Grant {
 	return out
 }
 
+// Count returns the number of active grants.
+func (s *GrantStore) Count() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.byID)
+}
+
 // String aids debugging.
 func (g Grant) String() string {
 	return fmt.Sprintf("grant(%s:%s↔%s)", g.ID, g.AgentA, g.AgentB)

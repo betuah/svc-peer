@@ -25,14 +25,14 @@ type fakeView struct {
 	stats                                                  map[string]wgdev.PeerStats
 }
 
-func (f *fakeView) Role() string            { return f.role }
-func (f *fakeView) AgentID() string         { return f.agentID }
-func (f *fakeView) HubID() string           { return f.hubID }
-func (f *fakeView) Name() string            { return f.name }
-func (f *fakeView) OverlayIP() string       { return f.overlay }
-func (f *fakeView) CenterAgentID() string   { return f.centerID }
-func (f *fakeView) HubConnected() bool      { return f.hubConn }
-func (f *fakeView) WGBackend() string       { return f.backend }
+func (f *fakeView) Role() string          { return f.role }
+func (f *fakeView) AgentID() string       { return f.agentID }
+func (f *fakeView) HubID() string         { return f.hubID }
+func (f *fakeView) Name() string          { return f.name }
+func (f *fakeView) OverlayIP() string     { return f.overlay }
+func (f *fakeView) CenterAgentID() string { return f.centerID }
+func (f *fakeView) HubConnected() bool    { return f.hubConn }
+func (f *fakeView) WGBackend() string     { return f.backend }
 func (f *fakeView) NetmapPeers() ([]protocol.PeerConfig, map[string]string) {
 	return f.peers, f.paths
 }
@@ -72,7 +72,7 @@ func TestCenterLocalPeersIncludesTXRX(t *testing.T) {
 			"pk-edge": {PublicKey: "pk-edge", Endpoint: "203.0.113.5:51820", LastHandshake: hs, ReceiveBytes: 10, TransmitBytes: 20},
 		},
 	}
-	s := New(v, nil, nil, nil)
+	s := New(v, nil, nil, nil, nil)
 	res := httptest.NewRecorder()
 	s.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/local/peers", nil))
 	if res.Code != http.StatusOK {
@@ -121,7 +121,7 @@ func TestEdgeLocalStatusAndPeers(t *testing.T) {
 			"pk-center": {PublicKey: "pk-center", LastHandshake: hs, ReceiveBytes: 5, TransmitBytes: 7, Endpoint: "198.51.100.1:51820"},
 		},
 	}
-	s := New(v, nil, nil, nil)
+	s := New(v, nil, nil, nil, nil)
 
 	res := httptest.NewRecorder()
 	s.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/local/status", nil))
@@ -164,7 +164,7 @@ func TestEdgeLocalStatusAndPeers(t *testing.T) {
 }
 
 func TestLocalHealth(t *testing.T) {
-	s := New(&fakeView{role: protocol.RoleCenter, agentID: "c1", hubID: "h1"}, nil, nil, nil)
+	s := New(&fakeView{role: protocol.RoleCenter, agentID: "c1", hubID: "h1"}, nil, nil, nil, nil)
 	res := httptest.NewRecorder()
 	s.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/local/health", nil))
 	if res.Code != http.StatusOK {
@@ -233,7 +233,7 @@ func (f *fakeAllowlist) SyncAllowlist(context.Context) (AllowlistSyncResult, err
 
 func TestCenterAllowlistCRUD(t *testing.T) {
 	al := &fakeAllowlist{}
-	s := New(&fakeView{role: protocol.RoleCenter, agentID: "c1", hubID: "hub-main"}, al, nil, nil)
+	s := New(&fakeView{role: protocol.RoleCenter, agentID: "c1", hubID: "hub-main"}, al, nil, nil, nil)
 
 	res := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/local/allowlist", strings.NewReader(`{"label":"cam","tags":["warehouse"]}`))
@@ -280,7 +280,7 @@ func TestCenterAllowlistCRUD(t *testing.T) {
 }
 
 func TestEdgeAllowlistForbidden(t *testing.T) {
-	s := New(&fakeView{role: protocol.RoleEdge, agentID: "e1"}, &fakeAllowlist{}, nil, nil)
+	s := New(&fakeView{role: protocol.RoleEdge, agentID: "e1"}, &fakeAllowlist{}, nil, nil, nil)
 	res := httptest.NewRecorder()
 	s.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/local/allowlist", nil))
 	if res.Code != http.StatusForbidden {
@@ -335,7 +335,7 @@ func (f *fakeGrants) SyncGrants(context.Context) (GrantsSyncResult, error) {
 
 func TestCenterGrantsCRUD(t *testing.T) {
 	gm := &fakeGrants{}
-	s := New(&fakeView{role: protocol.RoleCenter, agentID: "c1", hubID: "hub-main"}, nil, gm, nil)
+	s := New(&fakeView{role: protocol.RoleCenter, agentID: "c1", hubID: "hub-main"}, nil, gm, nil, nil)
 
 	res := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/local/grants", strings.NewReader(`{"agent_a_id":"e1","agent_b_id":"e2"}`))
@@ -382,7 +382,7 @@ func TestCenterGrantsCRUD(t *testing.T) {
 }
 
 func TestEdgeGrantsForbidden(t *testing.T) {
-	s := New(&fakeView{role: protocol.RoleEdge, agentID: "e1"}, nil, &fakeGrants{}, nil)
+	s := New(&fakeView{role: protocol.RoleEdge, agentID: "e1"}, nil, &fakeGrants{}, nil, nil)
 	res := httptest.NewRecorder()
 	s.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/local/grants", nil))
 	if res.Code != http.StatusForbidden {

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/betuah/svc-peer/internal/metrics"
 	"github.com/betuah/svc-peer/internal/protocol"
 	"github.com/betuah/svc-peer/internal/ticket"
 	"github.com/gorilla/websocket"
@@ -33,14 +34,15 @@ func (c *Conn) send(v any) error {
 
 // Hub is the thin NAT-bridge / signaling process for one hub_id.
 type Hub struct {
-	cfg    Config
-	log    *slog.Logger
-	tokens *TokenStore
-	reg    *Registry
-	grants *GrantStore
-	netmap *NetmapBuilder
-	api    *API
-	store  *FileStore
+	cfg     Config
+	log     *slog.Logger
+	tokens  *TokenStore
+	reg     *Registry
+	grants  *GrantStore
+	netmap  *NetmapBuilder
+	api     *API
+	store   *FileStore
+	metrics *metrics.Registry
 
 	mu    sync.RWMutex
 	conns map[string]*Conn
@@ -106,25 +108,37 @@ func New(cfg Config, log *slog.Logger) (*Hub, error) {
 
 	grants := NewGrantStore()
 	h := &Hub{
-		cfg:    cfg,
-		log:    log,
-		tokens: tokens,
-		reg:    reg,
-		grants: grants,
-		netmap: NewNetmapBuilder(reg, grants),
-		store:  store,
-		conns:  make(map[string]*Conn),
+		cfg:     cfg,
+		log:     log.With("component", "hub", "hub_id", cfg.HubID),
+		tokens:  tokens,
+		reg:     reg,
+		grants:  grants,
+		netmap:  NewNetmapBuilder(reg, grants),
+		store:   store,
+		metrics: metrics.NewRegistry(),
+		conns:   make(map[string]*Conn),
 	}
+	h.registerMetrics()
 	h.api = &API{
 		cfg:    cfg,
 		tokens: tokens,
 		reg:    reg,
 		grants: grants,
 		netmap: h.netmap,
-		log:    log,
+		log:    h.log,
 		hub:    h,
 	}
 	return h, nil
+}
+
+// Metrics returns the Prometheus registry (GET /metrics).
+func (h *Hub) Metrics() *metrics.Registry { return h.metrics }
+
+// WSConnCount returns the number of active agent control WebSocket connections.
+func (h *Hub) WSConnCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.conns)
 }
 
 // Persist writes allowlist cache + registered agents to StatePath (no-op if unset).

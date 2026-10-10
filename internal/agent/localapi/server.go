@@ -16,8 +16,10 @@ import (
 	"github.com/betuah/svc-peer/internal/agent/allowlist"
 	"github.com/betuah/svc-peer/internal/agent/grants"
 	"github.com/betuah/svc-peer/internal/agent/wgdev"
+	"github.com/betuah/svc-peer/internal/metrics"
 	"github.com/betuah/svc-peer/internal/protocol"
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 )
 
 const txRXSource = "wireguard_device"
@@ -62,17 +64,26 @@ type Server struct {
 	allowlist AllowlistManager
 	grants    GrantManager
 	log       *slog.Logger
+	met       *metrics.Registry
 	srv       *http.Server
 }
 
 // New constructs a local API server (not yet listening).
 // allowlist and grants may be nil; center-only routes then return 503.
-func New(view View, allowlist AllowlistManager, grantMgr GrantManager, log *slog.Logger) *Server {
+// met may be nil; when set, GET /metrics is mounted and local API requests are counted.
+func New(view View, allowlist AllowlistManager, grantMgr GrantManager, log *slog.Logger, met *metrics.Registry) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	s := &Server{view: view, allowlist: allowlist, grants: grantMgr, log: log}
+	s := &Server{view: view, allowlist: allowlist, grants: grantMgr, log: log, met: met}
 	r := chi.NewRouter()
+	r.Use(middleware.RequestID)
+	r.Use(metrics.RequestLogger(log))
+	if met != nil {
+		httpMetrics := metrics.NewHTTPMetrics(met, "svc_peer_agent_local_api")
+		r.Use(httpMetrics.Middleware)
+		r.Get("/metrics", met.Handler().ServeHTTP)
+	}
 	r.Get("/local/health", s.handleHealth)
 	r.Get("/local/status", s.handleStatus)
 	r.Get("/local/peers", s.handlePeers)

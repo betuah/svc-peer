@@ -15,3 +15,5 @@ wg_listen_port: 51821
 heartbeat_sec: 15
 direct_wait_sec: 8
 local_api_listen: "127.0.0.1:9101"
+log_level: info
+log_format: text

@@ -61,6 +61,19 @@ func NewTokenStore(hubID string) *TokenStore {
 // HubID returns the store's hub scope.
 func (s *TokenStore) HubID() string { return s.hubID }
 
+// EdgeAllowlistCount returns the number of non-revoked edge join tokens.
+func (s *TokenStore) EdgeAllowlistCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, rec := range s.byID {
+		if rec.Role == RoleEdgeToken && !rec.Revoked {
+			n++
+		}
+	}
+	return n
+}
+
 // SeedManagement loads the bootstrap / management-token seed (ops/break-glass).
 func (s *TokenStore) SeedManagement(id, raw string) error {
 	if raw == "" {

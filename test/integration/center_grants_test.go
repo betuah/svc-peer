@@ -104,7 +104,7 @@ func TestCenterLocalGrantsCreateListRevokeSyncNetmap(t *testing.T) {
 		role: protocol.RoleCenter, agentID: centerID, hubID: "hub-center-grants",
 		name: "center", hubConn: true, hubURL: srv.URL, token: boot,
 	}
-	local := httptest.NewServer(localapi.New(view, nil, mgr, nil).Handler())
+	local := httptest.NewServer(localapi.New(view, nil, mgr, nil, nil).Handler())
 	defer local.Close()
 
 	body, err := json.Marshal(map[string]string{

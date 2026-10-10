@@ -10,7 +10,7 @@ The center agent (`role=center`) is the network authority for join tokens, allow
 |-----|---------|
 | [docs/architecture.md](docs/architecture.md) | Architecture: binaries, center/edge, hub cloud vs self-host, ACL, NAT/relay, identity |
 | [docs/deploy.md](docs/deploy.md) | Deploy: vendor cloud, self-host, TLS, Compose, GHCR release images, `CAP_NET_ADMIN` |
-| [docs/api.md](docs/api.md) | Hub control APIs and agent local HTTP (including center `/local/allowlist`) |
+| [docs/api.md](docs/api.md) | Hub control APIs, agent local HTTP, Prometheus `/metrics`, logging knobs |
 | [docs/README.md](docs/README.md) | Docs index |
 
 ## Binaries
@@ -96,8 +96,10 @@ cmd/hub|agent|relay
 internal/hub                 registry, allowlist, ACL netmap, HTTP + control WS
 internal/agent               hub client, identity, path manager, WG backends
 internal/agent/allowlist     center durable edge join-token store + hub sync
-internal/agent/localapi      loopback /local/* HTTP API
+internal/agent/localapi      loopback /local/* HTTP API + /metrics
 internal/relay               UDP + WebSocket forwarders
+internal/logging             slog level/format helpers
+internal/metrics             Prometheus text exposition
 configs/                     example YAML
 configs/compose/             Compose service configs
 docs/                        architecture, deploy, API

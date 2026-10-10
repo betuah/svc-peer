@@ -4,3 +4,7 @@ http_listen_addr: ":3479"
 hub_url: "http://127.0.0.1:8080"
 # Must match hub relay_secret (HMAC relay tickets). Not an auth / management token.
 relay_secret: "change-me-relay-secret"
+# Logging: level info|debug; format text (default) or json.
+log_level: info
+log_format: text
+# Prometheus metrics: GET /metrics on http_listen_addr (with /health and /relay).

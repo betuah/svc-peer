@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/betuah/svc-peer/internal/metrics"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -17,9 +18,14 @@ func (h *Hub) Router() http.Handler {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
+	r.Use(metrics.RequestLogger(h.log))
+
+	httpMetrics := metrics.NewHTTPMetrics(h.metrics, "svc_peer_hub_http")
+	r.Use(httpMetrics.Middleware)
 
 	api := h.api
 	r.Get("/health", api.Health)
+	r.Get("/metrics", h.metrics.Handler().ServeHTTP)
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Timeout(60 * time.Second))
@@ -69,10 +75,11 @@ func (h *Hub) ListenAndServe(ctx context.Context) error {
 	go func() {
 		h.log.Info("hub listening",
 			"addr", h.cfg.ListenAddr,
-			"hub_id", h.cfg.HubID,
 			"overlay_cidr", h.cfg.OverlayCIDR,
 			"role", "nat-bridge",
 			"tls", tlsEnabled,
+			"log_level", h.cfg.LogLevel,
+			"log_format", h.cfg.LogFormat,
 		)
 		var err error
 		if tlsEnabled {
