@@ -19,26 +19,30 @@ import (
 	"github.com/betuah/svc-peer/internal/agent/pathmgr"
 	"github.com/betuah/svc-peer/internal/agent/relayclient"
 	"github.com/betuah/svc-peer/internal/agent/wgdev"
+	"github.com/betuah/svc-peer/internal/metrics"
 	"github.com/betuah/svc-peer/internal/protocol"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
 // Agent is the local peer process: register with hub, apply netmap, maintain WG device.
 type Agent struct {
-	cfg       Config
-	log       *slog.Logger
-	client    *HubClient
-	device    wgdev.Device
-	dns       *dns.Resolver
-	relay     *relayclient.Client
-	paths     *pathmgr.Manager
-	allowlist *allowlist.Store // center only
-	grants    *grants.Store    // center only
-	agentID   string
-	pubKey    string
-	privKey   string
-	stun      []string
-	relays    []string
+	cfg            Config
+	log            *slog.Logger
+	client         *HubClient
+	device         wgdev.Device
+	dns            *dns.Resolver
+	relay          *relayclient.Client
+	paths          *pathmgr.Manager
+	allowlist      *allowlist.Store // center only
+	grants         *grants.Store    // center only
+	met            *metrics.Registry
+	registerTotal  *metrics.Counter
+	reconnectTotal *metrics.Counter
+	agentID        string
+	pubKey         string
+	privKey        string
+	stun           []string
+	relays         []string
 
 	mu            sync.RWMutex
 	hubID         string
@@ -83,20 +87,32 @@ func New(cfg Config, log *slog.Logger) (*Agent, error) {
 			return nil, err
 		}
 	}
-	return &Agent{
-		cfg:       cfg,
-		log:       log,
-		client:    NewHubClient(cfg.HubURL, cfg.AuthCredential(), cfg.HubTLSInsecureSkipVerify, log),
-		device:    dev,
-		dns:       dns.NewResolver(),
-		allowlist: al,
-		grants:    gs,
-		agentID:   agentID,
-		role:      cfg.Role,
-		privKey:   priv,
-		pubKey:    pub,
-	}, nil
+	log = log.With("component", "agent", "role", cfg.Role, "agent_id", agentID)
+	met := metrics.NewRegistry()
+	registerTotal := met.Counter("svc_peer_agent_register_total", "Hub register attempts by result")
+	reconnectTotal := met.Counter("svc_peer_agent_reconnect_total", "Control WebSocket connect attempts by result")
+	a := &Agent{
+		cfg:            cfg,
+		log:            log,
+		client:         NewHubClient(cfg.HubURL, cfg.AuthCredential(), cfg.HubTLSInsecureSkipVerify, log),
+		device:         dev,
+		dns:            dns.NewResolver(),
+		allowlist:      al,
+		grants:         gs,
+		met:            met,
+		registerTotal:  registerTotal,
+		reconnectTotal: reconnectTotal,
+		agentID:        agentID,
+		role:           cfg.Role,
+		privKey:        priv,
+		pubKey:         pub,
+	}
+	a.registerPeerCollectors()
+	return a, nil
 }
+
+// Metrics returns the agent Prometheus registry (served on the local API).
+func (a *Agent) Metrics() *metrics.Registry { return a.met }
 
 // Run registers, brings up WG, reports endpoints, and maintains control + path selection.
 func (a *Agent) Run(ctx context.Context) error {
@@ -111,8 +127,10 @@ func (a *Agent) Run(ctx context.Context) error {
 		WGBackend:    a.device.Backend(),
 	})
 	if err != nil {
+		a.registerTotal.Inc("result", "error")
 		return fmt.Errorf("register: %w", err)
 	}
+	a.registerTotal.Inc("result", "ok")
 	if reg.AgentID != a.agentID {
 		return fmt.Errorf("hub returned different agent_id: local=%s hub=%s", a.agentID, reg.AgentID)
 	}
@@ -148,7 +166,7 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	if a.cfg.LocalAPIListen != "" {
 		lv := localView{a: a}
-		localSrv := localapi.New(lv, lv, lv, a.log)
+		localSrv := localapi.New(lv, lv, lv, a.log, a.met)
 		go func() {
 			if err := localSrv.Start(ctx, a.cfg.LocalAPIListen); err != nil && err != context.Canceled {
 				a.log.Error("local api stopped", "err", err)
@@ -192,7 +210,8 @@ func (a *Agent) Run(ctx context.Context) error {
 	hb := time.Duration(a.cfg.HeartbeatSec) * time.Second
 	wsErr := make(chan error, 1)
 	go func() {
-		wsErr <- a.client.RunControlWS(ctx, a.agentID, hubID, hb, Handlers{
+		connected := false
+		err := a.client.RunControlWS(ctx, a.agentID, hubID, hb, Handlers{
 			OnNetmap: func(env protocol.Envelope) {
 				a.dns.Update(env.DNSMap)
 				if err := a.paths.ApplyNetmap(ctx, env.Revision, env.Peers); err != nil {
@@ -213,7 +232,16 @@ func (a *Agent) Run(ctx context.Context) error {
 				}
 				a.paths.HandleRelayTicket(ctx, env.PeerID, env.Ticket, urls)
 			},
+			OnConnected: func() {
+				connected = true
+				a.reconnectTotal.Inc("result", "ok")
+				a.log.Info("control websocket connected", "hub_id", hubID)
+			},
 		})
+		if err != nil && ctx.Err() == nil && !connected {
+			a.reconnectTotal.Inc("result", "error")
+		}
+		wsErr <- err
 	}()
 
 	endpointTicker := time.NewTicker(60 * time.Second)

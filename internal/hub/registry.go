@@ -10,13 +10,13 @@ import (
 )
 
 var (
-	ErrAgentNotFound     = errors.New("agent not found")
-	ErrPublicKeyUsed     = errors.New("public key already bound to another agent")
-	ErrAgentIDCollision  = errors.New("agent_id already bound to a different identity")
-	ErrCenterExists      = errors.New("center already claimed for this hub_id")
-	ErrCenterRequired    = errors.New("center not registered yet")
-	ErrInvalidAgentID    = errors.New("agent_id is required")
-	ErrInvalidRole       = errors.New("invalid role")
+	ErrAgentNotFound    = errors.New("agent not found")
+	ErrPublicKeyUsed    = errors.New("public key already bound to another agent")
+	ErrAgentIDCollision = errors.New("agent_id already bound to a different identity")
+	ErrCenterExists     = errors.New("center already claimed for this hub_id")
+	ErrCenterRequired   = errors.New("center not registered yet")
+	ErrInvalidAgentID   = errors.New("agent_id is required")
+	ErrInvalidRole      = errors.New("invalid role")
 )
 
 // Agent is a registered peer identity in the hub registry.
@@ -40,15 +40,15 @@ type Agent struct {
 
 // Registry tracks agents, presence, roles, and IPAM for one hub_id.
 type Registry struct {
-	mu           sync.RWMutex
-	hubID        string
-	agents       map[string]*Agent
-	byPubKey     map[string]string
-	centerID     string
-	ipam         *IPAM
-	dnsSuffix    string
-	revision     uint64
-	hbTimeout    time.Duration
+	mu        sync.RWMutex
+	hubID     string
+	agents    map[string]*Agent
+	byPubKey  map[string]string
+	centerID  string
+	ipam      *IPAM
+	dnsSuffix string
+	revision  uint64
+	hbTimeout time.Duration
 }
 
 // NewRegistry creates a registry with IPAM from overlayCIDR, scoped to hubID.
@@ -314,6 +314,13 @@ func (r *Registry) OnlineCount() int {
 		}
 	}
 	return n
+}
+
+// RegisteredCount returns the number of registered agents (online or offline).
+func (r *Registry) RegisteredCount() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.agents)
 }
 
 // SnapshotAgents returns a copy of all agents.

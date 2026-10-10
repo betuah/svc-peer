@@ -177,6 +177,8 @@ type Handlers struct {
 	OnNetmap      func(protocol.Envelope)
 	OnPunch       func(protocol.Envelope)
 	OnRelayTicket func(protocol.Envelope)
+	// OnConnected is called once after a successful WebSocket hello.
+	OnConnected func()
 }
 
 // RunControlWS connects to the control channel, sends heartbeats, and dispatches messages.
@@ -217,6 +219,9 @@ func (c *HubClient) RunControlWS(ctx context.Context, agentID, hubID string, hea
 		Token:   c.token,
 	}); err != nil {
 		return err
+	}
+	if h.OnConnected != nil {
+		h.OnConnected()
 	}
 
 	errCh := make(chan error, 1)

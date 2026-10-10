@@ -138,8 +138,8 @@ func (d *KernelDevice) UpdatePeerEndpoint(publicKey, endpoint string) error {
 	}
 	cfg := wgtypes.Config{
 		Peers: []wgtypes.PeerConfig{{
-			PublicKey: pk,
-			Endpoint:  udp,
+			PublicKey:  pk,
+			Endpoint:   udp,
 			UpdateOnly: true,
 		}},
 	}

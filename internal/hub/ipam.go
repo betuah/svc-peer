@@ -8,11 +8,11 @@ import (
 
 // IPAM allocates /32 overlay addresses from a configured CIDR.
 type IPAM struct {
-	mu       sync.Mutex
-	network  netip.Prefix
-	next     netip.Addr
-	last     netip.Addr
-	used     map[netip.Addr]struct{}
+	mu      sync.Mutex
+	network netip.Prefix
+	next    netip.Addr
+	last    netip.Addr
+	used    map[netip.Addr]struct{}
 }
 
 // HubAddr returns the reserved hub overlay address (network + 1).

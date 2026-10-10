@@ -13,11 +13,11 @@ const stateFileVersion = 1
 // stateFile is the on-disk JSON snapshot for durable hub membership + allowlist cache.
 // Online presence, last-seen, and endpoints are intentionally omitted (ephemeral).
 type stateFile struct {
-	Version    int                `json:"version"`
-	HubID      string             `json:"hub_id"`
-	SavedAt    time.Time          `json:"saved_at"`
-	Agents     []persistedAgent   `json:"agents"`
-	EdgeTokens []persistedToken   `json:"edge_tokens"`
+	Version    int              `json:"version"`
+	HubID      string           `json:"hub_id"`
+	SavedAt    time.Time        `json:"saved_at"`
+	Agents     []persistedAgent `json:"agents"`
+	EdgeTokens []persistedToken `json:"edge_tokens"`
 }
 
 type persistedAgent struct {

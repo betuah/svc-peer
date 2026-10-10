@@ -14,6 +14,8 @@ wg_listen_port: 51820
 heartbeat_sec: 15
 direct_wait_sec: 8
 local_api_listen: "0.0.0.0:9100"
+log_level: info
+log_format: text
 edge_tokens:
   - id: "seed-cam-01"
     token: "spt_dev_cam_warehouse_01_replace_me"

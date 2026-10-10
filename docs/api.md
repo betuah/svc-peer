@@ -23,7 +23,7 @@ When hub `tls_cert_file` and `tls_key_file` are set, the hub serves **HTTPS**; a
 
 ---
 
-## Hub: health
+## Hub: health and metrics
 
 ### `GET /health`
 
@@ -39,6 +39,20 @@ When hub `tls_cert_file` and `tls_key_file` are set, the hub serves **HTTPS**; a
 | `center_agent_id` | string | Sole center agent id, if registered |
 | `agents_connected` | int | Online agent count |
 | `netmap_revision` | uint64 | Current netmap revision |
+
+### `GET /metrics`
+
+Prometheus text exposition (`text/plain; version=0.0.4`). Bound on hub `listen_addr` (same listener as `/health`). No auth — restrict with network policy in production.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `svc_peer_hub_http_requests_total` | counter | `method`, `path`, `status` | HTTP requests (chi route patterns) |
+| `svc_peer_hub_http_request_duration_seconds` | histogram | `method`, `path` | Request latency |
+| `svc_peer_hub_agents_registered` | gauge | `hub_id` | Registered agents |
+| `svc_peer_hub_agents_online` | gauge | `hub_id` | Online agents |
+| `svc_peer_hub_allowlist_size` | gauge | `hub_id` | Active edge allowlist entries |
+| `svc_peer_hub_grants` | gauge | `hub_id` | Active A2A grants |
+| `svc_peer_hub_ws_connections` | gauge | `hub_id` | Control WebSocket connections |
 
 ---
 
@@ -268,9 +282,24 @@ Agent control channel (gorilla WebSocket). Over plain HTTP the URL is `ws://…/
 
 ## Agent local HTTP API
 
-Served by the **agent** process (`role=center` or `role=edge`), not the hub. Bind address: config `local_api_listen` (default `127.0.0.1:9100`). Empty disables the server.
+Served by the **agent** process (`role=center` or `role=edge`), not the hub. Bind address: config `local_api_listen` (default `127.0.0.1:9100`). Empty disables the server (including metrics).
 
 No authentication. Intended for loopback / host-local tooling only.
+
+### `GET /metrics`
+
+Prometheus text on `local_api_listen`.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `svc_peer_agent_local_api_requests_total` | counter | `method`, `path`, `status` | Local API requests |
+| `svc_peer_agent_local_api_request_duration_seconds` | histogram | `method`, `path` | Local API latency |
+| `svc_peer_agent_peers` | gauge | `hub_id`, `agent_id`, `role` | Netmap peer count |
+| `svc_peer_agent_wg_handshake_age_seconds` | gauge | `hub_id`, `agent_id`, `peer_id` | Seconds since last WG handshake (`-1` if none) |
+| `svc_peer_agent_wg_tx_bytes` | gauge | `hub_id`, `agent_id`, `peer_id` | WG device TX bytes |
+| `svc_peer_agent_wg_rx_bytes` | gauge | `hub_id`, `agent_id`, `peer_id` | WG device RX bytes |
+| `svc_peer_agent_register_total` | counter | `result` | Hub register outcomes (`ok` / `error`) |
+| `svc_peer_agent_reconnect_total` | counter | `result` | Control WS connect outcomes (`ok` / `error`) |
 
 `tx_bytes` / `rx_bytes` are read from the local WireGuard device:
 
@@ -425,6 +454,41 @@ Forces a full push of active grants and local revokes to the hub (center `center
 
 ---
 
+## Relay: health and metrics
+
+Served by `cmd/relay` on `http_listen_addr` (default `:3479`).
+
+### `GET /health`
+
+JSON `{"status":"ok","role":"relay"}`.
+
+### `GET /metrics`
+
+Prometheus text on `http_listen_addr` (same port as `/health` and `/relay`).
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `svc_peer_relay_http_requests_total` | counter | `method`, `path`, `status` | HTTP requests |
+| `svc_peer_relay_http_request_duration_seconds` | histogram | `method`, `path` | Request latency |
+| `svc_peer_relay_sessions` | gauge | `transport` | Announced/connected peers (`udp`, `ws`, `all`) |
+| `svc_peer_relay_forwards_total` | counter | `transport` | Frames forwarded (`udp` / `ws`) |
+| `svc_peer_relay_bytes_total` | counter | `transport` | Payload bytes forwarded |
+
+---
+
+## Logging
+
+All three binaries share config keys:
+
+| Key | Values | Default |
+|-----|--------|---------|
+| `log_level` | `info`, `debug` | `info` |
+| `log_format` | `text`, `json` | `text` |
+
+Structured `log/slog` fields used where relevant: `component`, `hub_id`, `agent_id`, `peer_id`, `role`, `request_id`. HTTP access lines are Debug (Warn on 5xx).
+
+---
+
 ## Related code
 
 | Area | Path |
@@ -435,3 +499,5 @@ Forces a full push of active grants and local revokes to the hub (center `center
 | Center allowlist store | `internal/agent/allowlist/` |
 | Center grant store | `internal/agent/grants/` |
 | WG device stats | `internal/agent/wgdev/` (`PeerStats`) |
+| Logging | `internal/logging/` |
+| Metrics | `internal/metrics/` |

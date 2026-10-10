@@ -31,3 +31,8 @@ state_path: "./data/hub-state.json"
 # both paths to a PEM certificate and private key.
 # tls_cert_file: "/etc/svc-peer/tls/cert.pem"
 # tls_key_file: "/etc/svc-peer/tls/key.pem"
+
+# Logging: level info|debug; format text (default, readable) or json (collectors).
+log_level: info
+log_format: text
+# Prometheus metrics: GET /metrics on listen_addr (same as /health).

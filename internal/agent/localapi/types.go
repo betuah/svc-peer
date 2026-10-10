@@ -74,16 +74,16 @@ type HealthResponse struct {
 
 // StatusResponse is GET /local/status (edge-oriented; also works on center).
 type StatusResponse struct {
-	Role              string `json:"role"`
-	AgentID           string `json:"agent_id"`
-	HubID             string `json:"hub_id,omitempty"`
-	Name              string `json:"name,omitempty"`
-	OverlayIP         string `json:"overlay_ip,omitempty"`
-	CenterAgentID     string `json:"center_agent_id,omitempty"`
-	HubConnected      bool   `json:"hub_connected"`
-	CenterConnected   bool   `json:"center_connected"`
+	Role               string `json:"role"`
+	AgentID            string `json:"agent_id"`
+	HubID              string `json:"hub_id,omitempty"`
+	Name               string `json:"name,omitempty"`
+	OverlayIP          string `json:"overlay_ip,omitempty"`
+	CenterAgentID      string `json:"center_agent_id,omitempty"`
+	HubConnected       bool   `json:"hub_connected"`
+	CenterConnected    bool   `json:"center_connected"`
 	CenterConnectivity string `json:"center_connectivity"` // online|offline|n/a
-	WGBackend         string `json:"wg_backend,omitempty"`
+	WGBackend          string `json:"wg_backend,omitempty"`
 }
 
 // PeerView is one peer in GET /local/peers (and detail).

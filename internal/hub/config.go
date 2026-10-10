@@ -17,9 +17,9 @@ type Config struct {
 	// ManagementTokenSeed bootstraps ops/break-glass management token (optional).
 	ManagementTokenSeed string `yaml:"management_token_seed"`
 	// RelaySecret is the HMAC key for relay tickets (shared with the relay process).
-	RelaySecret string `yaml:"relay_secret"`
-	OverlayCIDR string `yaml:"overlay_cidr"`
-	DNSSuffix   string `yaml:"dns_suffix"`
+	RelaySecret string   `yaml:"relay_secret"`
+	OverlayCIDR string   `yaml:"overlay_cidr"`
+	DNSSuffix   string   `yaml:"dns_suffix"`
 	STUNURLs    []string `yaml:"stun_urls"`
 	RelayURLs   []string `yaml:"relay_urls"`
 	// HeartbeatTimeout is how long without heartbeat before an agent is offline.
@@ -33,6 +33,10 @@ type Config struct {
 	// Setting only one is an error.
 	TLSCertFile string `yaml:"tls_cert_file"`
 	TLSKeyFile  string `yaml:"tls_key_file"`
+	// LogLevel is info (default) or debug.
+	LogLevel string `yaml:"log_level"`
+	// LogFormat is text (default, readable on servers) or json (for collectors).
+	LogFormat string `yaml:"log_format"`
 }
 
 // DefaultConfig returns sensible MVP defaults.
@@ -48,6 +52,8 @@ func DefaultConfig() Config {
 		STUNURLs:            []string{"stun:stun.l.google.com:19302"},
 		RelayURLs:           []string{"udp://127.0.0.1:3478", "ws://127.0.0.1:3479/relay"},
 		HeartbeatTimeoutSec: 45,
+		LogLevel:            "info",
+		LogFormat:           "text",
 	}
 }
 
@@ -96,6 +102,22 @@ func (c *Config) Validate() error {
 	keySet := c.TLSKeyFile != ""
 	if certSet != keySet {
 		return fmt.Errorf("tls_cert_file and tls_key_file must both be set or both empty")
+	}
+	if c.LogLevel == "" {
+		c.LogLevel = "info"
+	}
+	if c.LogFormat == "" {
+		c.LogFormat = "text"
+	}
+	switch c.LogLevel {
+	case "info", "debug":
+	default:
+		return fmt.Errorf("log_level must be info or debug (got %q)", c.LogLevel)
+	}
+	switch c.LogFormat {
+	case "text", "json":
+	default:
+		return fmt.Errorf("log_format must be text or json (got %q)", c.LogFormat)
 	}
 	return nil
 }

@@ -15,13 +15,14 @@ type UDPForwarder struct {
 	log    *slog.Logger
 	secret string
 	conn   *net.UDPConn
+	stats  *relayStats
 
 	mu    sync.RWMutex
 	peers map[string]*net.UDPAddr // agentID → addr
 }
 
 // NewUDPForwarder binds a UDP socket.
-func NewUDPForwarder(listenAddr, secret string, log *slog.Logger) (*UDPForwarder, error) {
+func NewUDPForwarder(listenAddr, secret string, log *slog.Logger, stats *relayStats) (*UDPForwarder, error) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -37,6 +38,7 @@ func NewUDPForwarder(listenAddr, secret string, log *slog.Logger) (*UDPForwarder
 		log:    log,
 		secret: secret,
 		conn:   conn,
+		stats:  stats,
 		peers:  make(map[string]*net.UDPAddr),
 	}, nil
 }
@@ -46,6 +48,13 @@ func (f *UDPForwarder) Addr() net.Addr { return f.conn.LocalAddr() }
 
 // Close shuts down the socket.
 func (f *UDPForwarder) Close() error { return f.conn.Close() }
+
+// PeerCount returns announced UDP peers.
+func (f *UDPForwarder) PeerCount() int {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return len(f.peers)
+}
 
 // Run reads packets and forwards until ctx is cancelled.
 func (f *UDPForwarder) Run(ctx context.Context) error {
@@ -78,11 +87,19 @@ func (f *UDPForwarder) Run(ctx context.Context) error {
 				continue
 			}
 			f.mu.Lock()
+			_, existed := f.peers[frame.PeerID]
 			f.peers[frame.PeerID] = from
+			nPeers := len(f.peers)
 			f.mu.Unlock()
-			f.log.Debug("relay peer announced", "peer_id", frame.PeerID, "from", from.String())
+			if f.stats != nil {
+				f.stats.udpPeers.Store(int64(nPeers))
+				if !existed {
+					f.log.Debug("relay peer announced", "peer_id", frame.PeerID, "from", from.String())
+				}
+			} else {
+				f.log.Debug("relay peer announced", "peer_id", frame.PeerID, "from", from.String())
+			}
 		case MsgData:
-			// Source is learned by addr; validate ticket allows dest and that some peer maps to from.
 			claims, err := ticket.Verify(f.secret, frame.Ticket, "", "")
 			if err != nil || !claims.Allows(frame.PeerID) {
 				continue
@@ -93,12 +110,14 @@ func (f *UDPForwarder) Run(ctx context.Context) error {
 			if to == nil {
 				continue
 			}
-			// Re-wrap for destination client (same framing); destination unwraps payload.
 			out := EncodeData(frame.Ticket, frame.PeerID, frame.Payload)
-			// Actually destination decodeDataPayload strips ticket+dest and returns payload only —
-			// client expects full msgData frame OR just payload? Client decodeDataPayload expects full frame.
 			if _, err := f.conn.WriteToUDP(out, to); err != nil {
 				f.log.Debug("relay forward failed", "err", err)
+				continue
+			}
+			if f.stats != nil {
+				f.stats.forwards.Inc("transport", "udp")
+				f.stats.bytes.Add(uint64(len(frame.Payload)), "transport", "udp")
 			}
 		}
 	}

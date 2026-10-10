@@ -65,3 +65,16 @@ func TestConfigValidateTLSMismatch(t *testing.T) {
 		t.Fatal("expected error for key without cert")
 	}
 }
+
+func TestConfigValidateLog(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.LogLevel = "trace"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for bad log_level")
+	}
+	cfg.LogLevel = "info"
+	cfg.LogFormat = "xml"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for bad log_format")
+	}
+}

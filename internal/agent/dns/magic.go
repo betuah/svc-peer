@@ -9,7 +9,7 @@ import (
 // Resolver maps MagicDNS names to overlay IPs using the latest netmap DNS map.
 // Platform OS resolver plumbing is deferred; this is the in-process lookup used by the agent.
 type Resolver struct {
-	mu   sync.RWMutex
+	mu     sync.RWMutex
 	byName map[string]string // lowercased name → overlay IP
 }
 

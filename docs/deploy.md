@@ -183,21 +183,46 @@ Hub durable state: set `state_path` (Compose uses `/var/lib/svc-peer/hub-state.j
 - Replace example `center_bootstrap`, `management_token_seed`, `relay_secret`, and edge tokens.
 - Enable hub TLS (`tls_cert_file` / `tls_key_file`) and switch agent `hub_url` to `https://…`.
 - Persist agent `state_dir` volumes so `agent_id` and WG keys survive restarts.
-- Expose hub/relay publicly as needed; keep agent local APIs on loopback or a private network unless intentionally exposed.
+- Expose hub/relay publicly as needed; keep agent local APIs (and `/metrics`) on loopback or a private network unless intentionally exposed.
 - Prefer kernel WG on bare-metal/VM agents when the module is available; keep userspace for constrained containers.
 
 ## Configuration map
 
 | File | Process |
 |------|---------|
-| `configs/hub.example.yaml` | Hub (`center_bootstrap`, overlay CIDR, `state_path`, optional TLS, STUN/relay URLs) |
-| `configs/agent-center.example.yaml` | Center (`hub_url`, `center_bootstrap`, `edge_tokens`, `local_api_listen`) |
-| `configs/agent.example.yaml` | Edge (`hub_url`, join token, `local_api_listen`) |
+| `configs/hub.example.yaml` | Hub (`center_bootstrap`, overlay CIDR, `state_path`, optional TLS, STUN/relay URLs, logging) |
+| `configs/agent-center.example.yaml` | Center (`hub_url`, `center_bootstrap`, `edge_tokens`, `local_api_listen`, logging) |
+| `configs/agent.example.yaml` | Edge (`hub_url`, join token, `local_api_listen`, logging) |
 | `configs/agent-viewer.example.yaml` | Second edge example |
-| `configs/relay.example.yaml` | Relay (`relay_secret`, listen addrs) |
+| `configs/relay.example.yaml` | Relay (`relay_secret`, listen addrs, logging) |
 | `configs/compose/*.yaml` | Compose service configs |
 
 Agent `local_api_listen` defaults to `127.0.0.1:9100`. Set empty to disable. Use distinct ports when multiple agents share a host.
+
+## Logging and metrics
+
+| Knob | Values | Default |
+|------|--------|---------|
+| `log_level` | `info`, `debug` | `info` |
+| `log_format` | `text`, `json` | `text` |
+
+Text logs are the default for operators reading journald/docker logs; set `log_format: json` when shipping to a collector. Debug enables request traces and other low-level detail; keep `info` in production unless troubleshooting.
+
+Prometheus scrapes (`GET /metrics`, text format):
+
+| Process | Bind |
+|---------|------|
+| hub | `listen_addr` (e.g. `:8080/metrics`) |
+| agent | `local_api_listen` (e.g. `127.0.0.1:9100/metrics`) |
+| relay | `http_listen_addr` (e.g. `:3479/metrics`) |
+
+Metric names and labels: [api.md](./api.md). Scrape cost is low (in-process counters/gauges; peer WG stats collected only on scrape). Protect `/metrics` with network policy the same way you protect `/health` on public listeners; agent metrics stay on loopback by default.
+
+```bash
+curl -s http://127.0.0.1:8080/metrics | head
+curl -s http://127.0.0.1:9100/metrics | head
+curl -s http://127.0.0.1:3479/metrics | head
+```
 
 ## Security checklist
 

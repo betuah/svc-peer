@@ -18,14 +18,14 @@ import (
 
 // UserspaceDevice uses wireguard-go + platform TUN.
 type UserspaceDevice struct {
-	log    *slog.Logger
-	mu     sync.Mutex
-	dev    *device.Device
-	tun    tun.Device
-	name   string
-	cfg    InterfaceConfig
-	up     bool
-	peers  map[string]protocol.PeerConfig // pubkey → config
+	log   *slog.Logger
+	mu    sync.Mutex
+	dev   *device.Device
+	tun   tun.Device
+	name  string
+	cfg   InterfaceConfig
+	up    bool
+	peers map[string]protocol.PeerConfig // pubkey → config
 }
 
 // NewUserspaceDevice constructs a userspace backend (not yet Up).

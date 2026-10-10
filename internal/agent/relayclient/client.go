@@ -283,10 +283,13 @@ func (w *wsConn) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (w *wsConn) Close() error                       { return w.c.Close() }
-func (w *wsConn) LocalAddr() net.Addr                { return dummyAddr("ws-local") }
-func (w *wsConn) RemoteAddr() net.Addr               { return dummyAddr("ws-remote") }
-func (w *wsConn) SetDeadline(t time.Time) error      { _ = w.c.SetReadDeadline(t); return w.c.SetWriteDeadline(t) }
+func (w *wsConn) Close() error         { return w.c.Close() }
+func (w *wsConn) LocalAddr() net.Addr  { return dummyAddr("ws-local") }
+func (w *wsConn) RemoteAddr() net.Addr { return dummyAddr("ws-remote") }
+func (w *wsConn) SetDeadline(t time.Time) error {
+	_ = w.c.SetReadDeadline(t)
+	return w.c.SetWriteDeadline(t)
+}
 func (w *wsConn) SetReadDeadline(t time.Time) error  { return w.c.SetReadDeadline(t) }
 func (w *wsConn) SetWriteDeadline(t time.Time) error { return w.c.SetWriteDeadline(t) }
 

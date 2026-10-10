@@ -47,8 +47,12 @@ type Config struct {
 	PrivateKeyPath string   `yaml:"private_key_path"`
 	DirectWaitSec  int      `yaml:"direct_wait_sec"`
 	// LocalAPIListen is the bind address for the agent-local HTTP API (loopback by default).
-	// Empty disables the local API.
+	// Empty disables the local API. Metrics are served at GET /metrics on this address.
 	LocalAPIListen string `yaml:"local_api_listen"`
+	// LogLevel is info (default) or debug.
+	LogLevel string `yaml:"log_level"`
+	// LogFormat is text (default, readable on servers) or json (for collectors).
+	LogFormat string `yaml:"log_format"`
 }
 
 // DefaultConfig returns agent defaults.
@@ -64,6 +68,8 @@ func DefaultConfig() Config {
 		HeartbeatSec:   15,
 		DirectWaitSec:  8,
 		LocalAPIListen: "127.0.0.1:9100",
+		LogLevel:       "info",
+		LogFormat:      "text",
 	}
 }
 
@@ -135,6 +141,22 @@ func LoadConfig(path string) (Config, error) {
 		}
 	default:
 		return cfg, fmt.Errorf("wg_backend must be auto|kernel|userspace (got %q)", cfg.WGBackend)
+	}
+	if cfg.LogLevel == "" {
+		cfg.LogLevel = "info"
+	}
+	if cfg.LogFormat == "" {
+		cfg.LogFormat = "text"
+	}
+	switch cfg.LogLevel {
+	case "info", "debug":
+	default:
+		return cfg, fmt.Errorf("log_level must be info or debug (got %q)", cfg.LogLevel)
+	}
+	switch cfg.LogFormat {
+	case "text", "json":
+	default:
+		return cfg, fmt.Errorf("log_format must be text or json (got %q)", cfg.LogFormat)
 	}
 	return cfg, nil
 }
